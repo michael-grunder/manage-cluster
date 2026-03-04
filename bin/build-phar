@@ -1,0 +1,122 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+require dirname(__DIR__) . '/vendor/autoload.php';
+
+$projectRoot = dirname(__DIR__);
+$defaultOutput = sprintf('%s/dist/manage-cluster.phar', $projectRoot);
+$output = $defaultOutput;
+
+for ($i = 1; $i < count($argv); $i++) {
+    $arg = $argv[$i];
+
+    if ($arg === '--output') {
+        $outputArg = $argv[$i + 1] ?? null;
+        if (!is_string($outputArg) || $outputArg === '' || str_starts_with($outputArg, '--')) {
+            throw new \InvalidArgumentException('--output expects a non-empty path.');
+        }
+
+        $output = $outputArg;
+        $i++;
+        continue;
+    }
+
+    if ($arg === '--help' || $arg === '-h') {
+        fwrite(STDOUT, "Usage: php bin/build-phar [--output PATH]\n");
+        exit(0);
+    }
+
+    throw new \InvalidArgumentException(sprintf('Unknown argument: %s', $arg));
+}
+
+if (!extension_loaded('phar')) {
+    throw new \RuntimeException('The phar extension is required to build the archive.');
+}
+
+$pharReadonly = ini_get('phar.readonly');
+if ($pharReadonly !== false && filter_var($pharReadonly, FILTER_VALIDATE_BOOL)) {
+    throw new \RuntimeException('Cannot build PHAR while phar.readonly=1. Use `php -d phar.readonly=0 bin/build-phar`.');
+}
+
+$output = str_starts_with($output, '/')
+    ? $output
+    : sprintf('%s/%s', $projectRoot, ltrim($output, '/'));
+
+$outputDir = dirname($output);
+if (!is_dir($outputDir) && !mkdir($concurrentDirectory = $outputDir, 0o755, true) && !is_dir($concurrentDirectory)) {
+    throw new \RuntimeException(sprintf('Failed to create output directory: %s', $outputDir));
+}
+
+if (file_exists($output) && !unlink($output)) {
+    throw new \RuntimeException(sprintf('Failed to overwrite existing archive: %s', $output));
+}
+
+$alias = 'manage-cluster.phar';
+$phar = new \Phar($output, 0, $alias);
+$phar->startBuffering();
+
+addFile($phar, $projectRoot, 'bin/manage-cluster');
+addDirectory($phar, $projectRoot, 'src');
+addDirectory($phar, $projectRoot, 'vendor');
+
+$phar->setStub(<<<'PHP'
+#!/usr/bin/env php
+<?php
+Phar::mapPhar('manage-cluster.phar');
+require 'phar://manage-cluster.phar/bin/manage-cluster';
+__HALT_COMPILER();
+PHP);
+
+$phar->stopBuffering();
+
+if (!chmod($output, 0o755)) {
+    throw new \RuntimeException(sprintf('Built PHAR but failed to mark executable: %s', $output));
+}
+
+fwrite(STDOUT, sprintf("Built %s\n", $output));
+
+/**
+ * @param \Phar $phar
+ */
+function addDirectory(\Phar $phar, string $projectRoot, string $relativeDirectory): void
+{
+    $absoluteDirectory = sprintf('%s/%s', $projectRoot, $relativeDirectory);
+    if (!is_dir($absoluteDirectory)) {
+        throw new \RuntimeException(sprintf('Required directory does not exist: %s', $absoluteDirectory));
+    }
+
+    $iterator = new \RecursiveIteratorIterator(
+        new \RecursiveDirectoryIterator($absoluteDirectory, \RecursiveDirectoryIterator::SKIP_DOTS),
+    );
+
+    $files = [];
+    foreach ($iterator as $fileInfo) {
+        if (!$fileInfo->isFile()) {
+            continue;
+        }
+
+        $absolutePath = (string) $fileInfo->getPathname();
+        $relativePath = ltrim(substr($absolutePath, strlen($projectRoot)), '/');
+        $files[$relativePath] = $absolutePath;
+    }
+
+    ksort($files, SORT_STRING);
+    foreach ($files as $relativePath => $absolutePath) {
+        $phar->addFile($absolutePath, $relativePath);
+    }
+}
+
+/**
+ * @param \Phar $phar
+ */
+function addFile(\Phar $phar, string $projectRoot, string $relativePath): void
+{
+    $absolutePath = sprintf('%s/%s', $projectRoot, $relativePath);
+    if (!is_file($absolutePath)) {
+        throw new \RuntimeException(sprintf('Required file does not exist: %s', $absolutePath));
+    }
+
+    $phar->addFile($absolutePath, $relativePath);
+}

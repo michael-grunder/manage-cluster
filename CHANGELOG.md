@@ -11,9 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added cluster state tracking in `/tmp/manage-cluster` (configurable via `--state-dir`) so `--stop` can terminate whole clusters by a seed port.
 - Added automatic TLS material generation for test clusters started with `--tls`.
 - Added modular PHP implementation under `src/` for CLI parsing, state management, TLS generation, and Redis node orchestration.
+- Added `bin/build-phar` and `composer build-phar` for producing a single executable PHAR binary.
 
 ### Changed
 - Added README documentation for the new management utility and command usage.
+- Added README documentation for building and running the PHAR binary.
 
 ### Deprecated
 - None.

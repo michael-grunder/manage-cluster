@@ -1,5 +1,8 @@
 {
     "name": "mgrunder/create-cluster",
+    "scripts": {
+        "build-phar": "php -d phar.readonly=0 bin/build-phar"
+    },
     "autoload": {
         "psr-4": {
             "Mgrunder\\CreateCluster\\": "src/"

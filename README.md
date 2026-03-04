@@ -36,9 +36,30 @@ Rebalance a running cluster using a seed node:
 bin/manage-cluster --rebalance 7000
 ```
 
+## Build A Single PHAR Binary
+
+Build an executable PHAR archive:
+
+```bash
+composer build-phar
+```
+
+Or choose a custom output path:
+
+```bash
+php -d phar.readonly=0 bin/build-phar --output dist/custom-name.phar
+```
+
+Run it directly:
+
+```bash
+./dist/manage-cluster.phar --start {7000..7005} --replicas 1
+```
+
 ## Notes
 
 - Cluster state and per-node ephemeral configs/logs are kept under `/tmp/manage-cluster` by default.
 - Use `--state-dir` to change where metadata and temporary cluster directories are created.
 - Start validates that requested ports are not already listening before launching nodes.
 - TLS mode generates ephemeral CA and server cert/key material for local testing.
+- PHAR builds require the `phar` extension with `phar.readonly=0` at build time.
