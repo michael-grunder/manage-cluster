@@ -1,0 +1,57 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use Mgrunder\CreateCluster\ClusterManager;
+use Mgrunder\CreateCluster\ClusterStateStore;
+use Mgrunder\CreateCluster\CommandLineParser;
+use Mgrunder\CreateCluster\RedisNodeClient;
+use Mgrunder\CreateCluster\SystemInspector;
+use Mgrunder\CreateCluster\TlsMaterialGenerator;
+
+require dirname(__DIR__) . '/vendor/autoload.php';
+
+$parser = new CommandLineParser();
+
+if (in_array('--help', $argv, true) || in_array('-h', $argv, true)) {
+    fwrite(STDOUT, CommandLineParser::usage() . PHP_EOL);
+    exit(0);
+}
+
+try {
+    $options = $parser->parse($argv);
+} catch (InvalidArgumentException $e) {
+    fwrite(STDERR, $e->getMessage() . PHP_EOL . PHP_EOL);
+    fwrite(STDERR, CommandLineParser::usage() . PHP_EOL);
+    exit(1);
+}
+
+$manager = new ClusterManager(
+    systemInspector: new SystemInspector(),
+    stateStore: new ClusterStateStore($options->stateDir),
+    redisNodeClient: new RedisNodeClient(),
+    tlsMaterialGenerator: new TlsMaterialGenerator(),
+);
+
+try {
+    switch ($options->action) {
+        case 'start':
+            $manager->start($options);
+            break;
+
+        case 'stop':
+            $manager->stop($options);
+            break;
+
+        case 'rebalance':
+            $manager->rebalance($options);
+            break;
+
+        default:
+            throw new RuntimeException(sprintf('Unsupported action: %s', $options->action));
+    }
+} catch (Throwable $e) {
+    fwrite(STDERR, sprintf("error: %s\n", $e->getMessage()));
+    exit(1);
+}
