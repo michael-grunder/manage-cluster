@@ -19,7 +19,7 @@ use Throwable;
 final class ClusterStatusTuiRenderer
 {
     private const REPLICA_PREFIX = '↳ ';
-    private const NODE_ID_LENGTH = 6;
+    private const NODE_ID_LENGTH = 8;
 
     private ?Display $display = null;
     private ?int $viewportHeight = null;
@@ -90,9 +90,9 @@ final class ClusterStatusTuiRenderer
             ->header($this->buildTableHeader())
             ->rows(...$this->buildTableRows($shards))
             ->widths(
-                Constraint::percentage(40),
-                Constraint::length(6),
-                Constraint::length(9),
+                Constraint::percentage(30),
+                Constraint::length(8),
+                Constraint::length(8),
                 Constraint::length(13),
                 Constraint::length(10),
                 Constraint::min(8),
