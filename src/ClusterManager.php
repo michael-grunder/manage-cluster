@@ -311,6 +311,18 @@ final class ClusterManager
             $keyCounter = 0;
             $currentUsedBytes = $startUsedBytes;
             $containerMemberSize = max(8, (int) ceil($fill->memberSize / $fill->members));
+            $fillStartAt = microtime(true);
+            $lastProgressAt = $fillStartAt;
+            $renderProgressOnSingleLine = $this->isInteractiveStdout();
+            $clusterLabel = is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort);
+            $this->renderFillProgress(
+                clusterLabel: $clusterLabel,
+                currentUsedBytes: $currentUsedBytes,
+                targetUsedBytes: $fill->sizeBytes,
+                keysAdded: 0,
+                elapsedSeconds: 0,
+                singleLine: $renderProgressOnSingleLine,
+            );
 
             while ($currentUsedBytes < $fill->sizeBytes) {
                 $keyCounter++;
@@ -351,13 +363,30 @@ final class ClusterManager
                 if ($writes % 200 === 0) {
                     $currentUsedBytes = $this->sumUsedMemoryBytes($connections);
                 }
+
+                $now = microtime(true);
+                if (($now - $lastProgressAt) >= 1.0) {
+                    $currentUsedBytes = $this->sumUsedMemoryBytes($connections);
+                    $lastProgressAt = $now;
+                    $this->renderFillProgress(
+                        clusterLabel: $clusterLabel,
+                        currentUsedBytes: $currentUsedBytes,
+                        targetUsedBytes: $fill->sizeBytes,
+                        keysAdded: $writes,
+                        elapsedSeconds: $now - $fillStartAt,
+                        singleLine: $renderProgressOnSingleLine,
+                    );
+                }
             }
 
             $endUsedBytes = $this->sumUsedMemoryBytes($connections);
+            if ($renderProgressOnSingleLine) {
+                fwrite(STDOUT, PHP_EOL);
+            }
 
             printf(
                 "Filled cluster %s from %s to %s (target %s) with %d keys%s.\n",
-                is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort),
+                $clusterLabel,
                 $this->formatBytes($startUsedBytes),
                 $this->formatBytes($endUsedBytes),
                 $this->formatBytes($fill->sizeBytes),
@@ -777,6 +806,47 @@ final class ClusterManager
         return $this->crc16($key) % 16384;
     }
 
+    private function renderFillProgress(
+        string $clusterLabel,
+        int $currentUsedBytes,
+        int $targetUsedBytes,
+        int $keysAdded,
+        float $elapsedSeconds,
+        bool $singleLine,
+    ): void {
+        $percent = $targetUsedBytes > 0
+            ? min(100.0, ($currentUsedBytes / $targetUsedBytes) * 100)
+            : 100.0;
+
+        $message = sprintf(
+            'Filling %s: memory %s/%s (%.1f%%), keys added %s, elapsed %s',
+            $clusterLabel,
+            $this->formatBytes($currentUsedBytes),
+            $this->formatBytes($targetUsedBytes),
+            $percent,
+            number_format($keysAdded),
+            $this->formatElapsed($elapsedSeconds),
+        );
+
+        if ($singleLine) {
+            fwrite(STDOUT, sprintf("\r\033[2K%s", $message));
+
+            return;
+        }
+
+        fwrite(STDOUT, $message . PHP_EOL);
+    }
+
+    private function formatElapsed(float $elapsedSeconds): string
+    {
+        $elapsed = max(0, (int) round($elapsedSeconds));
+        $hours = intdiv($elapsed, 3600);
+        $minutes = intdiv($elapsed % 3600, 60);
+        $seconds = $elapsed % 60;
+
+        return sprintf('%02d:%02d:%02d', $hours, $minutes, $seconds);
+    }
+
     private function crc16(string $value): int
     {
         $crc = 0x0000;
@@ -850,9 +920,14 @@ final class ClusterManager
 
     private function clearTerminal(): void
     {
-        if (function_exists('stream_isatty') && stream_isatty(STDOUT)) {
+        if ($this->isInteractiveStdout()) {
             fwrite(STDOUT, "\033[H\033[2J");
         }
+    }
+
+    private function isInteractiveStdout(): bool
+    {
+        return function_exists('stream_isatty') && stream_isatty(STDOUT);
     }
 
     private function detectTerminalWidth(): int

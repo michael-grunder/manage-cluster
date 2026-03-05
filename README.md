@@ -117,5 +117,6 @@ Run it directly:
 - `fill` supports `--size` units: raw bytes or `k|m|g|t` suffixes (optional trailing `b`), for example `1048576`, `512m`, `1gb`.
 - `fill` defaults to random key generation across `string,set,list,hash,zset`; use `--types` CSV to constrain types.
 - For container types (`set`, `list`, `hash`, `zset`), each key gets `--members` entries and each entry uses `max(8, ceil(--member-size / --members))` bytes.
+- `fill` prints periodic progress (memory vs target, keys added, elapsed time); when stdout is a TTY it updates one line in place, otherwise it emits log-style lines.
 - `--pin-primary PORT` pins generated keys to one primary by finding a matching Redis Cluster hash tag and prefixing key names with that tag.
 - PHAR builds require the `phar` extension and `phar.readonly=0` at build time.
