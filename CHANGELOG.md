@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `status`/`--status` action that reads `CLUSTER SHARDS` and prints a compact, terminal-width-aware shard/node overview.
 - Added `--watch` mode for `status` that refreshes output every second.
 - Added `flush`/`--flush` action that sends `FLUSHDB` to each primary node in the specified cluster(s).
+- Added `fill`/`--fill` action that populates keys until cluster primary memory usage reaches `--size`, with optional key type/member knobs and `--pin-primary` support.
 - Added `ClusterShardsParser` and status DTOs in `src/` for parsing PhpRedis RESP2-style alternating key/value shard data.
 - Added PHPUnit coverage for shard parsing and RESP2 key/value zipping behavior.
 - Added PHPUnit coverage for command line parsing of the `flush` action.
@@ -29,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added README documentation for building and running the PHAR binary.
 - Updated `composer build-phar` to use the shim script and documented manual `/path/to/php -d phar.readonly=0 bin/build-phar` for advanced use.
 - Updated `bin/manage-cluster` wiring and CLI help text to include status/watch options.
+- Updated `bin/manage-cluster` wiring and CLI help text to include fill options and usage examples.
+- Updated README with `fill` examples, defaults, memory-size units, and primary pinning behavior.
 - Updated `status`/`--watch` rendering to use a `php-tui` table when stdout is a TTY, with a defensive plain-text fallback for non-interactive output.
 - Updated status TUI rows to visually indent replicas with a `↳` prefix and shortened displayed node IDs to improve column readability.
 

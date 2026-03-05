@@ -80,6 +80,29 @@ final class ClusterStateStore
     }
 
     /**
+     * @return list<array<string, mixed>>
+     */
+    public function listClusters(): array
+    {
+        $index = $this->loadIndex();
+        $clusters = [];
+        foreach ($index['clusters'] as $clusterDir) {
+            if ($clusterDir === '') {
+                continue;
+            }
+
+            $metadata = $this->loadClusterMetadata($clusterDir);
+            if ($metadata === null) {
+                continue;
+            }
+
+            $clusters[] = $metadata;
+        }
+
+        return $clusters;
+    }
+
+    /**
      * @param array<string, mixed> $metadata
      */
     public function removeClusterMetadata(array $metadata): void

@@ -23,7 +23,7 @@ final class RedisNodeClient
 
         while (microtime(true) < $deadline) {
             try {
-                $redis = $this->connect($port, $tls, $caCert);
+                $redis = $this->connectToNode($port, $tls, $caCert);
                 $redis->ping();
                 $redis->close();
 
@@ -41,7 +41,7 @@ final class RedisNodeClient
      */
     public function discoverClusterPorts(int $seedPort, bool $tls, ?string $caCert): array
     {
-        $redis = $this->connect($seedPort, $tls, $caCert);
+        $redis = $this->connectToNode($seedPort, $tls, $caCert);
 
         try {
             $raw = $redis->rawCommand('CLUSTER', 'NODES');
@@ -94,7 +94,7 @@ final class RedisNodeClient
     public function shutdown(int $port, bool $tls, ?string $caCert): void
     {
         try {
-            $redis = $this->connect($port, $tls, $caCert);
+            $redis = $this->connectToNode($port, $tls, $caCert);
         } catch (RedisException) {
             return;
         }
@@ -113,7 +113,7 @@ final class RedisNodeClient
 
     public function flushDb(int $port, bool $tls, ?string $caCert): void
     {
-        $redis = $this->connect($port, $tls, $caCert);
+        $redis = $this->connectToNode($port, $tls, $caCert);
 
         try {
             $response = $redis->rawCommand('FLUSHDB');
@@ -130,7 +130,7 @@ final class RedisNodeClient
      */
     public function fetchClusterShards(int $seedPort, bool $tls, ?string $caCert): array
     {
-        $redis = $this->connect($seedPort, $tls, $caCert);
+        $redis = $this->connectToNode($seedPort, $tls, $caCert);
 
         try {
             $raw = $redis->rawCommand('CLUSTER', 'SHARDS');
@@ -145,7 +145,7 @@ final class RedisNodeClient
         return $raw;
     }
 
-    private function connect(int $port, bool $tls, ?string $caCert): Redis
+    public function connectToNode(int $port, bool $tls, ?string $caCert): Redis
     {
         $redis = new Redis();
         $host = $tls ? 'tls://127.0.0.1' : '127.0.0.1';

@@ -62,6 +62,10 @@ try {
             $manager->flush($options);
             break;
 
+        case 'fill':
+            $manager->fill($options);
+            break;
+
         default:
             throw new RuntimeException(sprintf('Unsupported action: %s', $options->action));
     }

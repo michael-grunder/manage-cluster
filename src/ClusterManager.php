@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mgrunder\CreateCluster;
 
+use Redis;
 use RuntimeException;
 use Symfony\Component\Process\Process;
 
@@ -253,6 +254,126 @@ final class ClusterManager
         }
     }
 
+    public function fill(CommandLineOptions $options): void
+    {
+        $fill = $options->fill;
+        if ($fill === null) {
+            throw new RuntimeException('Missing fill options.');
+        }
+
+        $metadata = $this->resolveSingleClusterForFill($options->ports);
+        $seedPort = $this->extractFirstPort($metadata);
+        $tls = (bool) ($metadata['tls'] ?? false);
+        $caCert = is_array($metadata['tls_material'] ?? null)
+            ? (is_string($metadata['tls_material']['ca_cert'] ?? null) ? $metadata['tls_material']['ca_cert'] : null)
+            : null;
+
+        $rawShards = $this->readClusterShardsWithFallback($seedPort, $tls, $caCert);
+        $shards = $this->clusterShardsParser->parse($rawShards);
+        $primaryPorts = $this->extractPrimaryPorts($shards);
+        if ($primaryPorts === []) {
+            throw new RuntimeException(sprintf('No primary nodes discovered for seed port %d.', $seedPort));
+        }
+
+        if ($fill->pinPrimaryPort !== null && !in_array($fill->pinPrimaryPort, $primaryPorts, true)) {
+            throw new RuntimeException(sprintf(
+                '--pin-primary %d is not a primary in cluster %s. Primaries: %s',
+                $fill->pinPrimaryPort,
+                is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort),
+                implode(' ', array_map('strval', $primaryPorts)),
+            ));
+        }
+
+        $connections = [];
+        try {
+            foreach ($primaryPorts as $port) {
+                $connections[$port] = $this->connectNodeWithFallback($port, $tls, $caCert);
+            }
+
+            $startUsedBytes = $this->sumUsedMemoryBytes($connections);
+            if ($startUsedBytes >= $fill->sizeBytes) {
+                printf(
+                    "Cluster %s already at %s (target %s); no new keys generated.\n",
+                    is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort),
+                    $this->formatBytes($startUsedBytes),
+                    $this->formatBytes($fill->sizeBytes),
+                );
+
+                return;
+            }
+
+            $pinnedTag = null;
+            if ($fill->pinPrimaryPort !== null) {
+                $pinnedTag = $this->findHashTagForPrimary($fill->pinPrimaryPort, $shards);
+            }
+
+            $writes = 0;
+            $keyCounter = 0;
+            $currentUsedBytes = $startUsedBytes;
+            $containerMemberSize = max(8, (int) ceil($fill->memberSize / $fill->members));
+
+            while ($currentUsedBytes < $fill->sizeBytes) {
+                $keyCounter++;
+                $type = $fill->types[random_int(0, count($fill->types) - 1)];
+                $prefix = $pinnedTag === null ? '' : sprintf('{%s}:', $pinnedTag);
+                $key = sprintf('%s%s:%d', $prefix, $type, $keyCounter);
+
+                $slot = $this->clusterKeySlot($key);
+                $targetPort = $this->findPrimaryPortForSlot($slot, $shards);
+                if ($targetPort === null) {
+                    throw new RuntimeException(sprintf('Unable to map slot %d to a primary node.', $slot));
+                }
+
+                if ($fill->pinPrimaryPort !== null && $targetPort !== $fill->pinPrimaryPort) {
+                    throw new RuntimeException(sprintf(
+                        'Internal error: expected slot %d to map to primary %d, got %d.',
+                        $slot,
+                        $fill->pinPrimaryPort,
+                        $targetPort,
+                    ));
+                }
+
+                $redis = $connections[$targetPort] ?? null;
+                if (!$redis instanceof Redis) {
+                    throw new RuntimeException(sprintf('No Redis connection available for primary port %d.', $targetPort));
+                }
+
+                $this->writeFillKey(
+                    redis: $redis,
+                    key: $key,
+                    type: $type,
+                    members: $fill->members,
+                    memberSize: $fill->memberSize,
+                    containerMemberSize: $containerMemberSize,
+                );
+
+                $writes++;
+                if ($writes % 200 === 0) {
+                    $currentUsedBytes = $this->sumUsedMemoryBytes($connections);
+                }
+            }
+
+            $endUsedBytes = $this->sumUsedMemoryBytes($connections);
+
+            printf(
+                "Filled cluster %s from %s to %s (target %s) with %d keys%s.\n",
+                is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort),
+                $this->formatBytes($startUsedBytes),
+                $this->formatBytes($endUsedBytes),
+                $this->formatBytes($fill->sizeBytes),
+                $writes,
+                $fill->pinPrimaryPort !== null ? sprintf(' pinned to primary %d via {%s}', $fill->pinPrimaryPort, $pinnedTag) : '',
+            );
+        } finally {
+            foreach ($connections as $connection) {
+                try {
+                    $connection->close();
+                } catch (\Throwable) {
+                }
+            }
+        }
+    }
+
     /**
      * @param array{ca_cert: string, server_cert: string, server_key: string}|null $tlsMaterial
      */
@@ -435,6 +556,257 @@ final class ClusterManager
         } catch (\Throwable) {
             $this->redisNodeClient->flushDb($port, !$tls, $caCert);
         }
+    }
+
+    private function connectNodeWithFallback(int $port, bool $tls, ?string $caCert): Redis
+    {
+        try {
+            return $this->redisNodeClient->connectToNode($port, $tls, $caCert);
+        } catch (\Throwable) {
+            return $this->redisNodeClient->connectToNode($port, !$tls, $caCert);
+        }
+    }
+
+    /**
+     * @param list<int> $requestedPorts
+     * @return array<string, mixed>
+     */
+    private function resolveSingleClusterForFill(array $requestedPorts): array
+    {
+        if (count($requestedPorts) === 1) {
+            $seedPort = $requestedPorts[0];
+            $metadata = $this->stateStore->findClusterByPort($seedPort);
+            if ($metadata !== null) {
+                return $metadata;
+            }
+
+            return [
+                'id' => sprintf('adhoc-%d', $seedPort),
+                'ports' => [$seedPort],
+                'tls' => false,
+                'tls_material' => null,
+                'cluster_dir' => null,
+            ];
+        }
+
+        $clusters = $this->stateStore->listClusters();
+        if (count($clusters) === 1) {
+            return $clusters[0];
+        }
+
+        if ($clusters === []) {
+            throw new RuntimeException('fill needs a seed port when no managed clusters are present.');
+        }
+
+        $seeds = [];
+        foreach ($clusters as $cluster) {
+            try {
+                $seeds[] = $this->extractFirstPort($cluster);
+            } catch (\Throwable) {
+            }
+        }
+
+        throw new RuntimeException(sprintf(
+            'fill is ambiguous with %d managed clusters; pass a seed port (candidates: %s).',
+            count($clusters),
+            $seeds === [] ? 'unknown' : implode(' ', array_map('strval', $seeds)),
+        ));
+    }
+
+    /**
+     * @param array<int, Redis> $connections
+     */
+    private function sumUsedMemoryBytes(array $connections): int
+    {
+        $sum = 0;
+        foreach ($connections as $port => $redis) {
+            $info = $redis->info('memory');
+            if (!is_array($info)) {
+                throw new RuntimeException(sprintf('INFO memory returned unexpected data for primary %d.', $port));
+            }
+
+            $used = $info['used_memory'] ?? null;
+            if (!is_int($used) && !is_string($used)) {
+                throw new RuntimeException(sprintf('used_memory missing for primary %d.', $port));
+            }
+
+            $sum += (int) $used;
+        }
+
+        return $sum;
+    }
+
+    private function writeFillKey(
+        Redis $redis,
+        string $key,
+        string $type,
+        int $members,
+        int $memberSize,
+        int $containerMemberSize,
+    ): void {
+        if ($type === 'string') {
+            $ok = $redis->set($key, $this->randomHexString($memberSize));
+            if ($ok !== true) {
+                throw new RuntimeException(sprintf('SET failed for key %s', $key));
+            }
+
+            return;
+        }
+
+        if ($type === 'list') {
+            $args = ['RPUSH', $key];
+            for ($i = 1; $i <= $members; $i++) {
+                $args[] = $this->buildContainerMember($key, $i, $containerMemberSize);
+            }
+
+            $response = $redis->rawCommand(...$args);
+            if ($response === false) {
+                throw new RuntimeException(sprintf('RPUSH failed for key %s', $key));
+            }
+
+            return;
+        }
+
+        if ($type === 'set') {
+            $args = ['SADD', $key];
+            for ($i = 1; $i <= $members; $i++) {
+                $args[] = $this->buildContainerMember($key, $i, $containerMemberSize);
+            }
+
+            $response = $redis->rawCommand(...$args);
+            if ($response === false) {
+                throw new RuntimeException(sprintf('SADD failed for key %s', $key));
+            }
+
+            return;
+        }
+
+        if ($type === 'hash') {
+            $args = ['HSET', $key];
+            for ($i = 1; $i <= $members; $i++) {
+                $args[] = sprintf('f%d', $i);
+                $args[] = $this->buildContainerMember($key, $i, $containerMemberSize);
+            }
+
+            $response = $redis->rawCommand(...$args);
+            if ($response === false) {
+                throw new RuntimeException(sprintf('HSET failed for key %s', $key));
+            }
+
+            return;
+        }
+
+        if ($type === 'zset') {
+            $args = ['ZADD', $key];
+            for ($i = 1; $i <= $members; $i++) {
+                $args[] = (string) $i;
+                $args[] = $this->buildContainerMember($key, $i, $containerMemberSize);
+            }
+
+            $response = $redis->rawCommand(...$args);
+            if ($response === false) {
+                throw new RuntimeException(sprintf('ZADD failed for key %s', $key));
+            }
+
+            return;
+        }
+
+        throw new RuntimeException(sprintf('Unsupported fill type: %s', $type));
+    }
+
+    private function buildContainerMember(string $key, int $index, int $length): string
+    {
+        $prefix = sprintf('%s:%d:', $key, $index);
+        if (strlen($prefix) >= $length) {
+            return substr($prefix, 0, $length);
+        }
+
+        return $prefix . $this->randomHexString($length - strlen($prefix));
+    }
+
+    private function randomHexString(int $length): string
+    {
+        if ($length <= 0) {
+            return '';
+        }
+
+        return substr(bin2hex(random_bytes((int) ceil($length / 2))), 0, $length);
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function findHashTagForPrimary(int $targetPrimaryPort, array $shards): string
+    {
+        for ($index = 1; $index <= 100_000; $index++) {
+            $candidate = sprintf('s%d', $index);
+            $slot = $this->clusterKeySlot(sprintf('{%s}:probe', $candidate));
+            $ownerPort = $this->findPrimaryPortForSlot($slot, $shards);
+            if ($ownerPort === $targetPrimaryPort) {
+                return $candidate;
+            }
+        }
+
+        throw new RuntimeException(sprintf('Unable to find a hash tag mapping to primary %d.', $targetPrimaryPort));
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function findPrimaryPortForSlot(int $slot, array $shards): ?int
+    {
+        foreach ($shards as $shard) {
+            if ($slot >= $shard->slotStart && $slot <= $shard->slotEnd) {
+                return $shard->master->port;
+            }
+        }
+
+        return null;
+    }
+
+    private function clusterKeySlot(string $key): int
+    {
+        $open = strpos($key, '{');
+        if ($open !== false) {
+            $close = strpos($key, '}', $open + 1);
+            if ($close !== false && $close > $open + 1) {
+                $key = substr($key, $open + 1, $close - $open - 1);
+            }
+        }
+
+        return $this->crc16($key) % 16384;
+    }
+
+    private function crc16(string $value): int
+    {
+        $crc = 0x0000;
+        $length = strlen($value);
+        for ($offset = 0; $offset < $length; $offset++) {
+            $crc ^= ord($value[$offset]) << 8;
+            for ($bit = 0; $bit < 8; $bit++) {
+                if (($crc & 0x8000) !== 0) {
+                    $crc = (($crc << 1) ^ 0x1021) & 0xFFFF;
+                } else {
+                    $crc = ($crc << 1) & 0xFFFF;
+                }
+            }
+        }
+
+        return $crc;
+    }
+
+    private function formatBytes(int $bytes): string
+    {
+        $units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+        $value = (float) $bytes;
+        $unitIndex = 0;
+
+        while ($value >= 1024 && $unitIndex < count($units) - 1) {
+            $value /= 1024;
+            $unitIndex++;
+        }
+
+        return sprintf('%.2f %s', $value, $units[$unitIndex]);
     }
 
     /**

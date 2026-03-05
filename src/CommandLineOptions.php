@@ -21,6 +21,7 @@ final readonly class CommandLineOptions
         public int $tlsRsaBits,
         public string $stateDir,
         public bool $watch,
+        public ?FillOptions $fill,
     ) {
     }
 }

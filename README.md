@@ -1,6 +1,6 @@
 # create-cluster
 
-`bin/manage-cluster` starts, stops, rebalances, inspects, and flushes ephemeral local Redis Cluster instances.
+`bin/manage-cluster` starts, stops, rebalances, inspects, flushes, and fills ephemeral local Redis Cluster instances.
 
 ## Requirements
 
@@ -41,6 +41,14 @@ Flush DB data on every primary node in one or more clusters:
 ```bash
 bin/manage-cluster flush 7000
 bin/manage-cluster flush 7000 8000
+```
+
+Fill a cluster with synthetic keys until total primary `used_memory` reaches a target:
+
+```bash
+bin/manage-cluster fill --size 1g
+bin/manage-cluster fill 7000 --size 256m --types string,set --members 32 --member-size 2048
+bin/manage-cluster fill 7000 --size 512m --pin-primary 7003
 ```
 
 Inspect cluster shard/node status from a seed node:
@@ -105,4 +113,9 @@ Run it directly:
 - `status` uses `CLUSTER SHARDS` and renders an interactive terminal table via `php-tui` (with a plain-text fallback when stdout is not a TTY).
 - `--watch` is supported for `status` and refreshes the terminal once per second.
 - `flush` sends `FLUSHDB` to primary nodes only (replicas are not targeted directly).
+- `fill` can run with no explicit seed port when exactly one managed cluster exists in the state store.
+- `fill` supports `--size` units: raw bytes or `k|m|g|t` suffixes (optional trailing `b`), for example `1048576`, `512m`, `1gb`.
+- `fill` defaults to random key generation across `string,set,list,hash,zset`; use `--types` CSV to constrain types.
+- For container types (`set`, `list`, `hash`, `zset`), each key gets `--members` entries and each entry uses `max(8, ceil(--member-size / --members))` bytes.
+- `--pin-primary PORT` pins generated keys to one primary by finding a matching Redis Cluster hash tag and prefixing key names with that tag.
 - PHAR builds require the `phar` extension and `phar.readonly=0` at build time.

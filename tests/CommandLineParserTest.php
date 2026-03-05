@@ -39,4 +39,70 @@ final class CommandLineParserTest extends TestCase
 
         $parser->parse(['bin/manage-cluster', 'flush', '7000', '--watch']);
     }
+
+    public function testParsesFillWithRequiredSizeAndNoPort(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'fill', '--size', '1g']);
+
+        self::assertSame('fill', $options->action);
+        self::assertSame([], $options->ports);
+        self::assertNotNull($options->fill);
+        self::assertSame(1024 ** 3, $options->fill->sizeBytes);
+        self::assertSame(['string', 'set', 'list', 'hash', 'zset'], $options->fill->types);
+        self::assertSame(8, $options->fill->members);
+        self::assertSame(256, $options->fill->memberSize);
+        self::assertNull($options->fill->pinPrimaryPort);
+    }
+
+    public function testParsesFillWithAllKnobs(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse([
+            'bin/manage-cluster',
+            '--fill',
+            '7000',
+            '--size',
+            '256m',
+            '--types',
+            'set,zset',
+            '--members',
+            '64',
+            '--member-size',
+            '2048',
+            '--pin-primary',
+            '7003',
+        ]);
+
+        self::assertSame('fill', $options->action);
+        self::assertSame([7000], $options->ports);
+        self::assertNotNull($options->fill);
+        self::assertSame(256 * (1024 ** 2), $options->fill->sizeBytes);
+        self::assertSame(['set', 'zset'], $options->fill->types);
+        self::assertSame(64, $options->fill->members);
+        self::assertSame(2048, $options->fill->memberSize);
+        self::assertSame(7003, $options->fill->pinPrimaryPort);
+    }
+
+    public function testFillRequiresSize(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('fill requires --size');
+
+        $parser->parse(['bin/manage-cluster', 'fill', '7000']);
+    }
+
+    public function testSizeIsRejectedOutsideFill(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--size can only be used with fill.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--size', '1g']);
+    }
 }
