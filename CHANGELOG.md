@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added PHPUnit coverage for shard parsing and RESP2 key/value zipping behavior.
 - Added PHPUnit coverage for command line parsing of the `flush` action.
 - Added `php-tui/php-tui` dependency for terminal UI rendering.
+- Added `add-replica`/`--add-replica` action to start a new node and attach it to a specified primary with `CLUSTER MEET` + `CLUSTER REPLICATE`, including optional `--port` override.
 
 ### Changed
 - Added README documentation for the new management utility and command usage.
@@ -38,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated `fill` progress lines to a compact format: `[HH:MM:SS XX%] used/target, N keys`.
 - Updated `status`/`--watch` rendering to use a `php-tui` table when stdout is a TTY, with a defensive plain-text fallback for non-interactive output.
 - Updated status TUI rows to visually indent replicas with a `↳` prefix and shortened displayed node IDs to improve column readability.
+- Updated replica provisioning to inspect `CONFIG GET dir` on the primary node and reuse the same `/tmp/manage-cluster/...` cluster directory when applicable.
 
 ### Deprecated
 - None.

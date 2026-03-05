@@ -1,6 +1,6 @@
 # create-cluster
 
-`bin/manage-cluster` starts, stops, rebalances, inspects, flushes, and fills ephemeral local Redis Cluster instances.
+`bin/manage-cluster` starts, stops, rebalances, inspects, flushes, fills, and adds replicas to ephemeral local Redis Cluster instances.
 
 ## Requirements
 
@@ -34,6 +34,13 @@ Rebalance a running cluster using a seed node:
 
 ```bash
 bin/manage-cluster rebalance 7000
+```
+
+Add a replica to an existing primary (auto-selecting a new port outside current cluster range):
+
+```bash
+bin/manage-cluster add-replica 7000
+bin/manage-cluster add-replica 7000 --port 7010
 ```
 
 Flush DB data on every primary node in one or more clusters:
@@ -114,6 +121,9 @@ Run it directly:
 - `status` uses `CLUSTER SHARDS` and renders an interactive terminal table via `php-tui` (with a plain-text fallback when stdout is not a TTY).
 - `--watch` is supported for `status` and refreshes the terminal once per second.
 - `flush` sends `FLUSHDB` to primary nodes only (replicas are not targeted directly).
+- `add-replica` starts a new Redis node, runs `CLUSTER MEET`, then `CLUSTER REPLICATE` to attach it to the specified primary.
+- For `add-replica`, when `--port` is omitted, the tool discovers existing cluster ports and picks the first available listening-free port above the current cluster range.
+- `add-replica` reads `CONFIG GET dir` from the target primary; when the node directory is under `/tmp/manage-cluster`, new node files are created in the same cluster directory.
 - `fill` can run with no explicit seed port when exactly one managed cluster exists in the state store.
 - `fill` supports `--size` units: raw bytes or `k|m|g|t` suffixes (optional trailing `b`), for example `1048576`, `512m`, `1gb`.
 - `fill` defaults to random key generation across `string,set,list,hash,zset`; use `--types` CSV to constrain types.

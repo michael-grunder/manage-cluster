@@ -401,6 +401,88 @@ final class ClusterManager
         }
     }
 
+    public function addReplica(CommandLineOptions $options): void
+    {
+        $this->systemInspector->ensureExecutableExists($options->redisBinary, 'redis-server');
+
+        $primaryPort = $options->ports[0];
+        printf("Preparing replica for primary %d\n", $primaryPort);
+
+        $metadata = $this->stateStore->findClusterByPort($primaryPort);
+        [$tls, $caCert, $tlsMaterial, $rawShards] = $this->resolveSeedConnectionContext($primaryPort, $metadata);
+        $shards = $this->clusterShardsParser->parse($rawShards);
+
+        $primaryNode = $this->findPrimaryNodeByPort($shards, $primaryPort);
+        if (!$primaryNode instanceof ClusterNodeStatus) {
+            throw new RuntimeException(sprintf('Port %d is not a primary node in the target cluster.', $primaryPort));
+        }
+
+        $usedPorts = $this->extractClusterPorts($shards);
+        $replicaPort = $options->replicaPort ?? $this->selectReplicaPortOutsideClusterRange($usedPorts);
+        if (in_array($replicaPort, $usedPorts, true)) {
+            throw new RuntimeException(sprintf('Requested replica port %d is already part of the cluster.', $replicaPort));
+        }
+
+        if ($this->systemInspector->isPortListening($replicaPort)) {
+            throw new RuntimeException(sprintf('Port %d is already in use.', $replicaPort));
+        }
+
+        $clusterDir = $this->resolveReplicaClusterDirectory($primaryPort, $tls, $caCert, $metadata);
+        printf("Using cluster directory %s\n", $clusterDir);
+
+        $configPath = $this->writeNodeConfiguration(
+            clusterDir: $clusterDir,
+            port: $replicaPort,
+            announceIp: $options->announceIp,
+            tls: $tls,
+            tlsMaterial: $tlsMaterial,
+        );
+
+        printf("Starting redis-server on port %d\n", $replicaPort);
+        try {
+            $this->runProcess([$options->redisBinary, $configPath]);
+            $this->redisNodeClient->waitForReady($replicaPort, $tls, $caCert);
+
+            $meetHost = $primaryNode->endpoint !== ''
+                ? $primaryNode->endpoint
+                : ($primaryNode->ip !== '' ? $primaryNode->ip : '127.0.0.1');
+
+            printf("Issuing CLUSTER MEET to %s:%d\n", $meetHost, $primaryNode->port);
+            $this->redisNodeClient->clusterMeet($replicaPort, $tls, $caCert, $meetHost, $primaryNode->port);
+            $this->redisNodeClient->waitForKnownClusterNode($replicaPort, $tls, $caCert, $primaryNode->id);
+
+            printf("Issuing CLUSTER REPLICATE %s\n", $primaryNode->shortId());
+            $this->redisNodeClient->clusterReplicate($replicaPort, $tls, $caCert, $primaryNode->id);
+            $this->waitForReplicaAttachment($primaryPort, $primaryPort, $replicaPort, $tls, $caCert);
+        } catch (\Throwable $exception) {
+            $this->redisNodeClient->shutdown($replicaPort, $tls, $caCert);
+            $this->systemInspector->waitForPortsToClose([$replicaPort]);
+            throw $exception;
+        }
+
+        if (is_array($metadata)) {
+            $ports = $metadata['ports'] ?? [];
+            if (is_array($ports)) {
+                $ports[] = $replicaPort;
+                $normalized = [];
+                foreach ($ports as $port) {
+                    if (!is_int($port) && !is_string($port)) {
+                        continue;
+                    }
+
+                    $normalized[] = (int) $port;
+                }
+
+                $normalized = array_values(array_unique($normalized));
+                sort($normalized, SORT_NUMERIC);
+                $metadata['ports'] = $normalized;
+                $this->stateStore->persistClusterMetadata($metadata);
+            }
+        }
+
+        printf("Replica %d attached to primary %d\n", $replicaPort, $primaryPort);
+    }
+
     /**
      * @param array{ca_cert: string, server_cert: string, server_key: string}|null $tlsMaterial
      */
@@ -459,6 +541,171 @@ final class ClusterManager
         }
 
         return $configPath;
+    }
+
+    /**
+     * @param array<string, mixed>|null $metadata
+     * @return array{bool, ?string, array{ca_cert: string, server_cert: string, server_key: string}|null, array<mixed>}
+     */
+    private function resolveSeedConnectionContext(int $seedPort, ?array $metadata): array
+    {
+        $defaultTls = is_array($metadata) ? (bool) ($metadata['tls'] ?? false) : false;
+        $caCert = is_array($metadata) && is_array($metadata['tls_material'] ?? null)
+            ? (is_string($metadata['tls_material']['ca_cert'] ?? null) ? $metadata['tls_material']['ca_cert'] : null)
+            : null;
+        $tlsMaterial = is_array($metadata) && is_array($metadata['tls_material'] ?? null)
+            && is_string($metadata['tls_material']['ca_cert'] ?? null)
+            && is_string($metadata['tls_material']['server_cert'] ?? null)
+            && is_string($metadata['tls_material']['server_key'] ?? null)
+            ? $metadata['tls_material']
+            : null;
+
+        $modes = [$defaultTls, !$defaultTls];
+        foreach ($modes as $mode) {
+            try {
+                $rawShards = $this->redisNodeClient->fetchClusterShards($seedPort, $mode, $caCert);
+
+                return [$mode, $caCert, $tlsMaterial, $rawShards];
+            } catch (\Throwable) {
+                // Try alternate mode.
+            }
+        }
+
+        throw new RuntimeException(sprintf('Unable to read cluster state from seed port %d.', $seedPort));
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function findPrimaryNodeByPort(array $shards, int $port): ?ClusterNodeStatus
+    {
+        foreach ($shards as $shard) {
+            if ($shard->master->port === $port) {
+                return $shard->master;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     * @return list<int>
+     */
+    private function extractClusterPorts(array $shards): array
+    {
+        $ports = [];
+        foreach ($shards as $shard) {
+            $ports[$shard->master->port] = true;
+            foreach ($shard->replicas as $replica) {
+                $ports[$replica->port] = true;
+            }
+        }
+
+        $allPorts = array_map('intval', array_keys($ports));
+        sort($allPorts, SORT_NUMERIC);
+
+        return $allPorts;
+    }
+
+    /**
+     * @param list<int> $usedPorts
+     */
+    private function selectReplicaPortOutsideClusterRange(array $usedPorts): int
+    {
+        if ($usedPorts === []) {
+            throw new RuntimeException('Unable to auto-select replica port without discovered cluster ports.');
+        }
+
+        $used = array_fill_keys($usedPorts, true);
+        $maxPort = max($usedPorts);
+        for ($candidate = $maxPort + 1; $candidate <= 65535; $candidate++) {
+            if (isset($used[$candidate])) {
+                continue;
+            }
+
+            if ($this->systemInspector->isPortListening($candidate)) {
+                continue;
+            }
+
+            return $candidate;
+        }
+
+        throw new RuntimeException('Unable to find an available replica port.');
+    }
+
+    /**
+     * @param array<string, mixed>|null $metadata
+     */
+    private function resolveReplicaClusterDirectory(int $primaryPort, bool $tls, ?string $caCert, ?array $metadata): string
+    {
+        $primaryNodeDir = $this->readConfigDirWithFallback($primaryPort, $tls, $caCert);
+        $defaultStateRoot = sprintf('%s/manage-cluster', rtrim(sys_get_temp_dir(), '/'));
+        $normalizedNodeDir = rtrim($primaryNodeDir, '/');
+
+        if (str_starts_with($normalizedNodeDir, $defaultStateRoot . '/')) {
+            $nodeBase = basename($normalizedNodeDir);
+            if (preg_match('/^node-\d+$/', $nodeBase) === 1) {
+                return dirname($normalizedNodeDir);
+            }
+
+            return $normalizedNodeDir;
+        }
+
+        if (is_array($metadata) && is_string($metadata['cluster_dir'] ?? null) && $metadata['cluster_dir'] !== '') {
+            return $metadata['cluster_dir'];
+        }
+
+        return $this->stateStore->createClusterDirectory();
+    }
+
+    private function readConfigDirWithFallback(int $port, bool $tls, ?string $caCert): string
+    {
+        try {
+            return $this->redisNodeClient->fetchConfigDir($port, $tls, $caCert);
+        } catch (\Throwable) {
+            return $this->redisNodeClient->fetchConfigDir($port, !$tls, $caCert);
+        }
+    }
+
+    private function waitForReplicaAttachment(
+        int $seedPort,
+        int $primaryPort,
+        int $replicaPort,
+        bool $tls,
+        ?string $caCert,
+        float $seconds = 10.0,
+    ): void {
+        $deadline = microtime(true) + $seconds;
+        while (microtime(true) < $deadline) {
+            try {
+                $rawShards = $this->redisNodeClient->fetchClusterShards($seedPort, $tls, $caCert);
+            } catch (\Throwable) {
+                usleep(100_000);
+                continue;
+            }
+
+            $shards = $this->clusterShardsParser->parse($rawShards);
+            foreach ($shards as $shard) {
+                if ($shard->master->port !== $primaryPort) {
+                    continue;
+                }
+
+                foreach ($shard->replicas as $replica) {
+                    if ($replica->port === $replicaPort) {
+                        return;
+                    }
+                }
+            }
+
+            usleep(100_000);
+        }
+
+        throw new RuntimeException(sprintf(
+            'Timed out waiting for replica %d to attach to primary %d.',
+            $replicaPort,
+            $primaryPort,
+        ));
     }
 
     /**

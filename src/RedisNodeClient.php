@@ -125,6 +125,98 @@ final class RedisNodeClient
         }
     }
 
+    public function fetchConfigDir(int $port, bool $tls, ?string $caCert): string
+    {
+        $redis = $this->connectToNode($port, $tls, $caCert);
+
+        try {
+            $response = $redis->rawCommand('CONFIG', 'GET', 'dir');
+        } finally {
+            $redis->close();
+        }
+
+        if (!is_array($response) || count($response) < 2) {
+            throw new RuntimeException(sprintf('CONFIG GET dir returned an unexpected response for port %d.', $port));
+        }
+
+        $dir = $response[1] ?? null;
+        if (!is_string($dir) || trim($dir) === '') {
+            throw new RuntimeException(sprintf('CONFIG GET dir did not include a usable directory for port %d.', $port));
+        }
+
+        return $dir;
+    }
+
+    public function clusterMeet(int $port, bool $tls, ?string $caCert, string $host, int $meetPort): void
+    {
+        $redis = $this->connectToNode($port, $tls, $caCert);
+
+        try {
+            $response = $redis->rawCommand('CLUSTER', 'MEET', $host, (string) $meetPort);
+        } finally {
+            $redis->close();
+        }
+
+        if ($response === false) {
+            throw new RuntimeException(sprintf('CLUSTER MEET failed on port %d.', $port));
+        }
+    }
+
+    public function clusterReplicate(int $port, bool $tls, ?string $caCert, string $nodeId): void
+    {
+        $redis = $this->connectToNode($port, $tls, $caCert);
+
+        try {
+            $response = $redis->rawCommand('CLUSTER', 'REPLICATE', $nodeId);
+        } finally {
+            $redis->close();
+        }
+
+        if ($response === false) {
+            throw new RuntimeException(sprintf('CLUSTER REPLICATE failed on port %d.', $port));
+        }
+    }
+
+    public function waitForKnownClusterNode(
+        int $port,
+        bool $tls,
+        ?string $caCert,
+        string $nodeId,
+        float $seconds = 10.0,
+    ): void {
+        $deadline = microtime(true) + $seconds;
+
+        while (microtime(true) < $deadline) {
+            $redis = null;
+            try {
+                $redis = $this->connectToNode($port, $tls, $caCert);
+                $response = $redis->rawCommand('CLUSTER', 'NODES');
+                if (is_string($response) && str_contains($response, $nodeId)) {
+                    $redis->close();
+
+                    return;
+                }
+            } catch (RedisException) {
+                // Retry until timeout.
+            } finally {
+                if ($redis instanceof Redis) {
+                    try {
+                        $redis->close();
+                    } catch (RedisException) {
+                    }
+                }
+            }
+
+            usleep(100_000);
+        }
+
+        throw new RuntimeException(sprintf(
+            'Timed out waiting for node %s to be visible from cluster node at port %d.',
+            $nodeId,
+            $port,
+        ));
+    }
+
     /**
      * @return array<mixed>
      */

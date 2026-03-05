@@ -12,6 +12,7 @@ final readonly class CommandLineOptions
     public function __construct(
         public string $action,
         public array $ports,
+        public ?int $replicaPort,
         public int $replicas,
         public string $redisBinary,
         public string $redisCliBinary,

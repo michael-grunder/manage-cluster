@@ -137,4 +137,46 @@ final class CommandLineParserTest extends TestCase
 
         $parser->parse(['bin/manage-cluster', 'status', '7000', '--keys', '20000']);
     }
+
+    public function testParsesAddReplicaWithAutoPortSelection(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'add-replica', '7000']);
+
+        self::assertSame('add-replica', $options->action);
+        self::assertSame([7000], $options->ports);
+        self::assertNull($options->replicaPort);
+    }
+
+    public function testParsesAddReplicaWithExplicitReplicaPort(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', '--add-replica', '7000', '--port', '7010']);
+
+        self::assertSame('add-replica', $options->action);
+        self::assertSame([7000], $options->ports);
+        self::assertSame(7010, $options->replicaPort);
+    }
+
+    public function testAddReplicaRequiresExactlyOnePrimaryPort(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('add-replica expects exactly one primary port.');
+
+        $parser->parse(['bin/manage-cluster', 'add-replica', '7000', '7001']);
+    }
+
+    public function testPortOptionIsRejectedOutsideAddReplica(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--port can only be used with add-replica.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--port', '7010']);
+    }
 }

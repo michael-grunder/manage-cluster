@@ -21,6 +21,7 @@ final class CommandLineParser
     {
         $action = null;
         $portTokens = [];
+        $replicaPort = null;
 
         $replicas = 0;
         $redisBinary = getenv('BIN_REDIS') ?: 'redis-server';
@@ -56,8 +57,9 @@ final class CommandLineParser
                 case '--status':
                 case '--flush':
                 case '--fill':
+                case '--add-replica':
                     if ($action !== null) {
-                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --rebalance, --status, --flush, or --fill.');
+                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --rebalance, --status, --flush, --fill, or --add-replica.');
                     }
 
                     $action = ltrim($arg, '-');
@@ -127,6 +129,10 @@ final class CommandLineParser
                     $pinPrimaryPort = $this->parseIntOption($argv, ++$i, '--pin-primary');
                     break;
 
+                case '--port':
+                    $replicaPort = $this->parseIntOption($argv, ++$i, '--port');
+                    break;
+
                 default:
                     if (str_starts_with($arg, '-')) {
                         throw new InvalidArgumentException(sprintf('Unknown option: %s', $arg));
@@ -138,7 +144,7 @@ final class CommandLineParser
                             break;
                         }
 
-                        throw new InvalidArgumentException(sprintf('Specify start/stop/rebalance/status/flush/fill (or --start/--stop/--rebalance/--status/--flush/--fill) before ports (got: %s).', $arg));
+                        throw new InvalidArgumentException(sprintf('Specify start/stop/rebalance/status/flush/fill/add-replica (or --start/--stop/--rebalance/--status/--flush/--fill/--add-replica) before ports (got: %s).', $arg));
                     }
 
                     $portTokens[] = $arg;
@@ -147,7 +153,7 @@ final class CommandLineParser
         }
 
         if ($action === null) {
-            throw new InvalidArgumentException('Missing action: use start/stop/rebalance/status/flush/fill (or --start/--stop/--rebalance/--status/--flush/--fill).');
+            throw new InvalidArgumentException('Missing action: use start/stop/rebalance/status/flush/fill/add-replica (or --start/--stop/--rebalance/--status/--flush/--fill/--add-replica).');
         }
 
         if ($action === 'start' && $replicas < 0) {
@@ -181,6 +187,10 @@ final class CommandLineParser
             throw new InvalidArgumentException('--pin-primary must be a valid TCP port.');
         }
 
+        if ($replicaPort !== null && ($replicaPort < 1 || $replicaPort > 65535)) {
+            throw new InvalidArgumentException('--port must be a valid TCP port.');
+        }
+
         if ($action !== 'fill' && $size !== null) {
             throw new InvalidArgumentException('--size can only be used with fill.');
         }
@@ -205,6 +215,10 @@ final class CommandLineParser
             throw new InvalidArgumentException('--pin-primary can only be used with fill.');
         }
 
+        if ($action !== 'add-replica' && $replicaPort !== null) {
+            throw new InvalidArgumentException('--port can only be used with add-replica.');
+        }
+
         $ports = [];
         if ($portTokens !== []) {
             $ports = PortParser::parse($portTokens);
@@ -223,6 +237,10 @@ final class CommandLineParser
 
         if ($action === 'fill' && count($ports) > 1) {
             throw new InvalidArgumentException('fill expects zero or one seed port.');
+        }
+
+        if ($action === 'add-replica' && count($ports) !== 1) {
+            throw new InvalidArgumentException('add-replica expects exactly one primary port.');
         }
 
         $fillOptions = null;
@@ -248,6 +266,7 @@ final class CommandLineParser
         return new CommandLineOptions(
             action: $action,
             ports: $ports,
+            replicaPort: $replicaPort,
             replicas: $replicas,
             redisBinary: $redisBinary,
             redisCliBinary: $redisCliBinary,
@@ -271,12 +290,14 @@ Usage:
   bin/manage-cluster status PORT [--watch]
   bin/manage-cluster flush PORT [PORT ...]
   bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]
+  bin/manage-cluster add-replica PRIMARY_PORT [--port PORT]
   bin/manage-cluster --start PORT [PORT ...] [--replicas N] [--tls]
   bin/manage-cluster --stop PORT [PORT ...]
   bin/manage-cluster --rebalance PORT [PORT ...]
   bin/manage-cluster --status PORT [--watch]
   bin/manage-cluster --flush PORT [PORT ...]
   bin/manage-cluster --fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]
+  bin/manage-cluster --add-replica PRIMARY_PORT [--port PORT]
 
 Options:
   --binary PATH                Path to redis-server (default: redis-server)
@@ -294,6 +315,7 @@ Options:
   --member-size N              String size or per-key payload size in bytes (adaptive default from --size when both size knobs are omitted, otherwise 256)
   --keys N                     Adaptive key-count target for fill sizing (used only when both --members and --member-size are omitted; default: 5000)
   --pin-primary PORT           Pin generated keys to one primary node
+  --port PORT                  Replica port for add-replica (otherwise auto-selected outside current cluster range)
   -h, --help                   Show this help text
 
 Port tokens can be provided as:
@@ -310,7 +332,7 @@ TXT;
 
     private static function isActionToken(string $value): bool
     {
-        return in_array($value, ['start', 'stop', 'rebalance', 'status', 'flush', 'fill'], true);
+        return in_array($value, ['start', 'stop', 'rebalance', 'status', 'flush', 'fill', 'add-replica'], true);
     }
 
     /**

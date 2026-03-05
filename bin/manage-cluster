@@ -66,6 +66,10 @@ try {
             $manager->fill($options);
             break;
 
+        case 'add-replica':
+            $manager->addReplica($options);
+            break;
+
         default:
             throw new RuntimeException(sprintf('Unsupported action: %s', $options->action));
     }
