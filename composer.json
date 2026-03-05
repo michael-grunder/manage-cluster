@@ -19,6 +19,7 @@
         "php-tui/php-tui": "^0.2"
     },
     "require-dev": {
-        "phpunit/phpunit": "^13.0"
+        "phpunit/phpunit": "^13.0",
+        "phpstan/phpstan": "^2.1"
     }
 }
