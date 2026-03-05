@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated `bin/manage-cluster` wiring and CLI help text to include fill options and usage examples.
 - Updated README with `fill` examples, defaults, memory-size units, and primary pinning behavior.
 - Updated `fill` default sizing so when both `--members` and `--member-size` are omitted it derives larger per-key payloads from `--size` using a 5,000-key target.
+- Updated `fill` sizing to accept `--keys` as an adaptive key-count target, influencing derived `--members` and `--member-size` when both are omitted.
 - Updated `fill` progress lines to a compact format: `[HH:MM:SS XX%] used/target, N keys`.
 - Updated `status`/`--watch` rendering to use a `php-tui` table when stdout is a TTY, with a defensive plain-text fallback for non-interactive output.
 - Updated status TUI rows to visually indent replicas with a `↳` prefix and shortened displayed node IDs to improve column readability.
@@ -47,5 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Added defensive start-time checks for occupied ports and cluster shape validation before node launch.
 - Fixed status TUI column sizing so node IDs no longer run into role labels, and reduced excess spacing between the `Node` and `ID` columns.
+- Fixed status TUI column widths for `ID`, `Role`, `Slots`, and `Offset` so adjacent values always have visible separation.
 - Fixed `CLUSTER SHARDS` parsing to preserve full node IDs instead of truncating them during parsing.
 - Fixed redundant type checks in `RedisNodeClient::discoverClusterPorts()` flagged by PHPStan (`function.alreadyNarrowedType`).

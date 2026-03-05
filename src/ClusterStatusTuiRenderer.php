@@ -20,6 +20,10 @@ final class ClusterStatusTuiRenderer
 {
     private const REPLICA_PREFIX = '↳ ';
     private const NODE_ID_LENGTH = 8;
+    private const ROLE_COLUMN_WIDTH = 9;
+    private const ID_COLUMN_WIDTH = self::NODE_ID_LENGTH + 1;
+    private const SLOTS_COLUMN_WIDTH = 14;
+    private const OFFSET_COLUMN_WIDTH = 11;
 
     private ?Display $display = null;
     private ?int $viewportHeight = null;
@@ -91,10 +95,10 @@ final class ClusterStatusTuiRenderer
             ->rows(...$this->buildTableRows($shards))
             ->widths(
                 Constraint::percentage(30),
-                Constraint::length(8),
-                Constraint::length(8),
-                Constraint::length(13),
-                Constraint::length(10),
+                Constraint::length(self::ID_COLUMN_WIDTH),
+                Constraint::length(self::ROLE_COLUMN_WIDTH),
+                Constraint::length(self::SLOTS_COLUMN_WIDTH),
+                Constraint::length(self::OFFSET_COLUMN_WIDTH),
                 Constraint::min(8),
             );
 

@@ -86,6 +86,17 @@ final class CommandLineParserTest extends TestCase
         self::assertSame(7003, $options->fill->pinPrimaryPort);
     }
 
+    public function testFillDerivesAdaptiveShapeFromCustomKeyTarget(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'fill', '--size', '1g', '--keys', '20000']);
+
+        self::assertNotNull($options->fill);
+        self::assertSame(14, $options->fill->members);
+        self::assertSame(53688, $options->fill->memberSize);
+    }
+
     public function testFillRequiresSize(): void
     {
         $parser = new CommandLineParser();
@@ -115,5 +126,15 @@ final class CommandLineParserTest extends TestCase
         $this->expectExceptionMessage('--size can only be used with fill.');
 
         $parser->parse(['bin/manage-cluster', 'status', '7000', '--size', '1g']);
+    }
+
+    public function testKeysIsRejectedOutsideFill(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--keys can only be used with fill.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--keys', '20000']);
     }
 }

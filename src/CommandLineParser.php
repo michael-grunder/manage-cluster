@@ -35,10 +35,12 @@ final class CommandLineParser
         $types = ['string', 'set', 'list', 'hash', 'zset'];
         $members = self::DEFAULT_FILL_MEMBERS;
         $memberSize = self::DEFAULT_FILL_MEMBER_SIZE;
+        $fillKeys = self::DEFAULT_FILL_TARGET_KEYS;
         $pinPrimaryPort = null;
         $typesProvided = false;
         $membersProvided = false;
         $memberSizeProvided = false;
+        $fillKeysProvided = false;
 
         for ($i = 1; $i < count($argv); $i++) {
             $arg = $argv[$i];
@@ -116,6 +118,11 @@ final class CommandLineParser
                     $memberSizeProvided = true;
                     break;
 
+                case '--keys':
+                    $fillKeys = $this->parseIntOption($argv, ++$i, '--keys');
+                    $fillKeysProvided = true;
+                    break;
+
                 case '--pin-primary':
                     $pinPrimaryPort = $this->parseIntOption($argv, ++$i, '--pin-primary');
                     break;
@@ -166,6 +173,10 @@ final class CommandLineParser
             throw new InvalidArgumentException('--member-size must be > 0.');
         }
 
+        if ($fillKeys <= 0) {
+            throw new InvalidArgumentException('--keys must be > 0.');
+        }
+
         if ($pinPrimaryPort !== null && ($pinPrimaryPort < 1 || $pinPrimaryPort > 65535)) {
             throw new InvalidArgumentException('--pin-primary must be a valid TCP port.');
         }
@@ -184,6 +195,10 @@ final class CommandLineParser
 
         if ($action !== 'fill' && $memberSizeProvided) {
             throw new InvalidArgumentException('--member-size can only be used with fill.');
+        }
+
+        if ($action !== 'fill' && $fillKeysProvided) {
+            throw new InvalidArgumentException('--keys can only be used with fill.');
         }
 
         if ($action !== 'fill' && $pinPrimaryPort !== null) {
@@ -218,7 +233,7 @@ final class CommandLineParser
 
             $sizeBytes = $this->parseSizeBytes($size);
             if (!$membersProvided && !$memberSizeProvided) {
-                [$members, $memberSize] = $this->deriveAdaptiveFillShape($sizeBytes);
+                [$members, $memberSize] = $this->deriveAdaptiveFillShape($sizeBytes, $fillKeys);
             }
 
             $fillOptions = new FillOptions(
@@ -255,13 +270,13 @@ Usage:
   bin/manage-cluster rebalance PORT [PORT ...]
   bin/manage-cluster status PORT [--watch]
   bin/manage-cluster flush PORT [PORT ...]
-  bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--pin-primary PORT]
+  bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]
   bin/manage-cluster --start PORT [PORT ...] [--replicas N] [--tls]
   bin/manage-cluster --stop PORT [PORT ...]
   bin/manage-cluster --rebalance PORT [PORT ...]
   bin/manage-cluster --status PORT [--watch]
   bin/manage-cluster --flush PORT [PORT ...]
-  bin/manage-cluster --fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--pin-primary PORT]
+  bin/manage-cluster --fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]
 
 Options:
   --binary PATH                Path to redis-server (default: redis-server)
@@ -277,6 +292,7 @@ Options:
   --types CSV                  Fill key types: string,set,list,hash,zset
   --members N                  Members per container key for fill (adaptive default from --size when both size knobs are omitted, otherwise 8)
   --member-size N              String size or per-key payload size in bytes (adaptive default from --size when both size knobs are omitted, otherwise 256)
+  --keys N                     Adaptive key-count target for fill sizing (used only when both --members and --member-size are omitted; default: 5000)
   --pin-primary PORT           Pin generated keys to one primary node
   -h, --help                   Show this help text
 
@@ -300,9 +316,9 @@ TXT;
     /**
      * @return array{int,int}
      */
-    private function deriveAdaptiveFillShape(int $sizeBytes): array
+    private function deriveAdaptiveFillShape(int $sizeBytes, int $targetKeys): array
     {
-        $targetBytesPerKey = max(1, (int) ceil($sizeBytes / self::DEFAULT_FILL_TARGET_KEYS));
+        $targetBytesPerKey = max(1, (int) ceil($sizeBytes / $targetKeys));
         $members = max(
             1,
             min(

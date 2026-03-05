@@ -47,6 +47,7 @@ Fill a cluster with synthetic keys until total primary `used_memory` reaches a t
 
 ```bash
 bin/manage-cluster fill --size 1g
+bin/manage-cluster fill --size 5g --keys 20000
 bin/manage-cluster fill 7000 --size 256m --types string,set --members 32 --member-size 2048
 bin/manage-cluster fill 7000 --size 512m --pin-primary 7003
 ```
@@ -116,7 +117,8 @@ Run it directly:
 - `fill` can run with no explicit seed port when exactly one managed cluster exists in the state store.
 - `fill` supports `--size` units: raw bytes or `k|m|g|t` suffixes (optional trailing `b`), for example `1048576`, `512m`, `1gb`.
 - `fill` defaults to random key generation across `string,set,list,hash,zset`; use `--types` CSV to constrain types.
-- When both `--members` and `--member-size` are omitted, `fill` now derives both from `--size` using a 5,000-key target so large fills use much larger keys by default.
+- When both `--members` and `--member-size` are omitted, `fill` derives both from `--size` using a 5,000-key target by default.
+- `--keys` overrides that adaptive key-count target (for example `--size 5g --keys 20000` yields smaller per-key payloads than the 5,000-key default); if either `--members` or `--member-size` is provided, those explicit values are used as-is.
 - For container types (`set`, `list`, `hash`, `zset`), each key gets `--members` entries and each entry uses `max(8, ceil(--member-size / --members))` bytes.
 - `fill` prints periodic progress (memory vs target, keys added, elapsed time); when stdout is a TTY it updates one line in place, otherwise it emits log-style lines.
 - `--pin-primary PORT` pins generated keys to one primary by finding a matching Redis Cluster hash tag and prefixing key names with that tag.
