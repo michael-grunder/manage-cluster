@@ -18,6 +18,9 @@ use Throwable;
 
 final class ClusterStatusTuiRenderer
 {
+    private const REPLICA_PREFIX = '↳ ';
+    private const NODE_ID_LENGTH = 6;
+
     private ?Display $display = null;
     private ?int $viewportHeight = null;
 
@@ -87,9 +90,9 @@ final class ClusterStatusTuiRenderer
             ->header($this->buildTableHeader())
             ->rows(...$this->buildTableRows($shards))
             ->widths(
-                Constraint::percentage(37),
-                Constraint::length(8),
-                Constraint::length(8),
+                Constraint::percentage(40),
+                Constraint::length(6),
+                Constraint::length(9),
                 Constraint::length(13),
                 Constraint::length(10),
                 Constraint::min(8),
@@ -129,20 +132,24 @@ final class ClusterStatusTuiRenderer
 
         $rows = [];
         foreach ($shards as $shard) {
-            $rows[] = $this->buildNodeRow($shard->master, 'master', $shard->slotRange());
+            $rows[] = $this->buildNodeRow($shard->master, 'master', $shard->slotRange(), false);
             foreach ($shard->replicas as $replica) {
-                $rows[] = $this->buildNodeRow($replica, 'replica', '-');
+                $rows[] = $this->buildNodeRow($replica, 'replica', '-', true);
             }
         }
 
         return $rows;
     }
 
-    private function buildNodeRow(ClusterNodeStatus $node, string $role, string $slots): TableRow
+    private function buildNodeRow(ClusterNodeStatus $node, string $role, string $slots, bool $isReplica): TableRow
     {
+        $address = $isReplica
+            ? self::REPLICA_PREFIX . $node->address()
+            : $node->address();
+
         return TableRow::fromStrings(
-            $node->address(),
-            $node->shortId(8),
+            $address,
+            $node->shortId(self::NODE_ID_LENGTH),
             $role,
             $slots,
             (string) $node->replicationOffset,
