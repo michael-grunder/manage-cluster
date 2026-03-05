@@ -24,6 +24,7 @@ final class CommandLineParser
         $tlsDays = 3650;
         $tlsRsaBits = 2048;
         $stateDir = sprintf('%s/manage-cluster', sys_get_temp_dir());
+        $watch = false;
 
         for ($i = 1; $i < count($argv); $i++) {
             $arg = $argv[$i];
@@ -36,8 +37,9 @@ final class CommandLineParser
                 case '--start':
                 case '--stop':
                 case '--rebalance':
+                case '--status':
                     if ($action !== null) {
-                        throw new InvalidArgumentException('Only one of --start, --stop, or --rebalance may be used.');
+                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --rebalance, or --status.');
                     }
 
                     $action = ltrim($arg, '-');
@@ -75,6 +77,10 @@ final class CommandLineParser
                     $stateDir = $this->parseStringOption($argv, ++$i, '--state-dir');
                     break;
 
+                case '--watch':
+                    $watch = true;
+                    break;
+
                 default:
                     if (str_starts_with($arg, '-')) {
                         throw new InvalidArgumentException(sprintf('Unknown option: %s', $arg));
@@ -86,7 +92,7 @@ final class CommandLineParser
                             break;
                         }
 
-                        throw new InvalidArgumentException(sprintf('Specify start/stop/rebalance (or --start/--stop/--rebalance) before ports (got: %s).', $arg));
+                        throw new InvalidArgumentException(sprintf('Specify start/stop/rebalance/status (or --start/--stop/--rebalance/--status) before ports (got: %s).', $arg));
                     }
 
                     $portTokens[] = $arg;
@@ -95,7 +101,7 @@ final class CommandLineParser
         }
 
         if ($action === null) {
-            throw new InvalidArgumentException('Missing action: use start/stop/rebalance (or --start/--stop/--rebalance).');
+            throw new InvalidArgumentException('Missing action: use start/stop/rebalance/status (or --start/--stop/--rebalance/--status).');
         }
 
         if ($action === 'start' && $replicas < 0) {
@@ -110,9 +116,17 @@ final class CommandLineParser
             throw new InvalidArgumentException('--tls-rsa-bits must be >= 1024.');
         }
 
+        if ($watch && $action !== 'status') {
+            throw new InvalidArgumentException('--watch can only be used with status.');
+        }
+
         $ports = PortParser::parse($portTokens);
         if ($action === 'start' && count($ports) === 1) {
             $ports = $this->expandSingleStartPort($ports[0], $replicas);
+        }
+
+        if ($action === 'status' && count($ports) !== 1) {
+            throw new InvalidArgumentException('status expects exactly one seed port.');
         }
 
         return new CommandLineOptions(
@@ -126,6 +140,7 @@ final class CommandLineParser
             tlsDays: $tlsDays,
             tlsRsaBits: $tlsRsaBits,
             stateDir: $stateDir,
+            watch: $watch,
         );
     }
 
@@ -136,9 +151,11 @@ Usage:
   bin/manage-cluster start PORT [PORT ...] [--replicas N] [--tls]
   bin/manage-cluster stop PORT [PORT ...]
   bin/manage-cluster rebalance PORT [PORT ...]
+  bin/manage-cluster status PORT [--watch]
   bin/manage-cluster --start PORT [PORT ...] [--replicas N] [--tls]
   bin/manage-cluster --stop PORT [PORT ...]
   bin/manage-cluster --rebalance PORT [PORT ...]
+  bin/manage-cluster --status PORT [--watch]
 
 Options:
   --binary PATH                Path to redis-server (default: redis-server)
@@ -149,6 +166,7 @@ Options:
   --tls-days N                 TLS certificate validity in days (default: 3650)
   --tls-rsa-bits N             RSA key size (default: 2048)
   --state-dir PATH             Cluster metadata root (default: /tmp/manage-cluster)
+  --watch                      Refresh status output every second (status only)
   -h, --help                   Show this help text
 
 Port tokens can be provided as:
@@ -165,7 +183,7 @@ TXT;
 
     private static function isActionToken(string $value): bool
     {
-        return in_array($value, ['start', 'stop', 'rebalance'], true);
+        return in_array($value, ['start', 'stop', 'rebalance', 'status'], true);
     }
 
     /**

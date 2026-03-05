@@ -1,6 +1,6 @@
 # create-cluster
 
-`bin/manage-cluster` starts, stops, and rebalances ephemeral local Redis Cluster instances.
+`bin/manage-cluster` starts, stops, rebalances, and inspects ephemeral local Redis Cluster instances.
 
 ## Requirements
 
@@ -34,6 +34,18 @@ Rebalance a running cluster using a seed node:
 
 ```bash
 bin/manage-cluster rebalance 7000
+```
+
+Inspect cluster shard/node status from a seed node:
+
+```bash
+bin/manage-cluster status 7000
+```
+
+Watch continuously (refresh every second):
+
+```bash
+bin/manage-cluster --status 7000 --watch
 ```
 
 ## Build A Single PHAR Binary
@@ -83,4 +95,6 @@ Run it directly:
 - For `start`, a single seed port auto-expands to contiguous ports:
   `7000..7003` for default replicas (`0`), or `3 * (replicas + 1)` ports when replicas are `>= 1`.
 - TLS mode generates ephemeral CA and server cert/key material for local testing.
+- `status` uses `CLUSTER SHARDS` and renders a terminal-width-aware overview of master/replica roles, slot ranges, replication offsets, and health.
+- `--watch` is supported for `status` and refreshes the terminal once per second.
 - PHAR builds require the `phar` extension and `phar.readonly=0` at build time.

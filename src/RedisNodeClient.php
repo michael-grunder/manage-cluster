@@ -111,6 +111,26 @@ final class RedisNodeClient
         }
     }
 
+    /**
+     * @return array<mixed>
+     */
+    public function fetchClusterShards(int $seedPort, bool $tls, ?string $caCert): array
+    {
+        $redis = $this->connect($seedPort, $tls, $caCert);
+
+        try {
+            $raw = $redis->rawCommand('CLUSTER', 'SHARDS');
+        } finally {
+            $redis->close();
+        }
+
+        if (!is_array($raw)) {
+            throw new RuntimeException('CLUSTER SHARDS returned an unexpected response.');
+        }
+
+        return $raw;
+    }
+
     private function connect(int $port, bool $tls, ?string $caCert): Redis
     {
         $redis = new Redis();

@@ -4,7 +4,9 @@
 declare(strict_types=1);
 
 use Mgrunder\CreateCluster\ClusterManager;
+use Mgrunder\CreateCluster\ClusterShardsParser;
 use Mgrunder\CreateCluster\ClusterStateStore;
+use Mgrunder\CreateCluster\ClusterStatusRenderer;
 use Mgrunder\CreateCluster\CommandLineParser;
 use Mgrunder\CreateCluster\RedisNodeClient;
 use Mgrunder\CreateCluster\SystemInspector;
@@ -32,6 +34,8 @@ $manager = new ClusterManager(
     stateStore: new ClusterStateStore($options->stateDir),
     redisNodeClient: new RedisNodeClient(),
     tlsMaterialGenerator: new TlsMaterialGenerator(),
+    clusterShardsParser: new ClusterShardsParser(),
+    clusterStatusRenderer: new ClusterStatusRenderer(),
 );
 
 try {
@@ -46,6 +50,10 @@ try {
 
         case 'rebalance':
             $manager->rebalance($options);
+            break;
+
+        case 'status':
+            $manager->status($options);
             break;
 
         default:

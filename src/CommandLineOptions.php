@@ -20,6 +20,7 @@ final readonly class CommandLineOptions
         public int $tlsDays,
         public int $tlsRsaBits,
         public string $stateDir,
+        public bool $watch,
     ) {
     }
 }

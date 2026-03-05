@@ -14,6 +14,8 @@ final class ClusterManager
         private readonly ClusterStateStore $stateStore,
         private readonly RedisNodeClient $redisNodeClient,
         private readonly TlsMaterialGenerator $tlsMaterialGenerator,
+        private readonly ClusterShardsParser $clusterShardsParser,
+        private readonly ClusterStatusRenderer $clusterStatusRenderer,
     ) {
     }
 
@@ -181,6 +183,38 @@ final class ClusterManager
         printf("Rebalanced cluster using seed 127.0.0.1:%d\n", $seedPort);
     }
 
+    public function status(CommandLineOptions $options): void
+    {
+        $seedPort = $options->ports[0];
+        $metadata = $this->stateStore->findClusterByPort($seedPort) ?? [];
+
+        $tls = (bool) ($metadata['tls'] ?? false);
+        $caCert = is_array($metadata['tls_material'] ?? null)
+            ? (is_string($metadata['tls_material']['ca_cert'] ?? null) ? $metadata['tls_material']['ca_cert'] : null)
+            : null;
+
+        while (true) {
+            $rawShards = $this->readClusterShardsWithFallback($seedPort, $tls, $caCert);
+            $shards = $this->clusterShardsParser->parse($rawShards);
+
+            if ($options->watch) {
+                $this->clearTerminal();
+            }
+            fwrite(STDOUT, $this->clusterStatusRenderer->render(
+                shards: $shards,
+                width: $this->detectTerminalWidth(),
+                seedPort: $seedPort,
+                watchMode: $options->watch,
+            ));
+
+            if (!$options->watch) {
+                return;
+            }
+
+            usleep(1_000_000);
+        }
+    }
+
     /**
      * @param array{ca_cert: string, server_cert: string, server_key: string}|null $tlsMaterial
      */
@@ -334,5 +368,41 @@ final class ClusterManager
     {
         $process = new Process($command);
         $process->mustRun();
+    }
+
+    /**
+     * @return array<mixed>
+     */
+    private function readClusterShardsWithFallback(int $seedPort, bool $tls, ?string $caCert): array
+    {
+        try {
+            return $this->redisNodeClient->fetchClusterShards($seedPort, $tls, $caCert);
+        } catch (\Throwable) {
+            return $this->redisNodeClient->fetchClusterShards($seedPort, !$tls, $caCert);
+        }
+    }
+
+    private function clearTerminal(): void
+    {
+        if (function_exists('stream_isatty') && stream_isatty(STDOUT)) {
+            fwrite(STDOUT, "\033[H\033[2J");
+        }
+    }
+
+    private function detectTerminalWidth(): int
+    {
+        $columns = getenv('COLUMNS');
+        if (is_string($columns) && preg_match('/^\d+$/', $columns) === 1 && (int) $columns > 0) {
+            return (int) $columns;
+        }
+
+        $sttyOutput = [];
+        $sttyExitCode = 1;
+        @exec('stty size 2>/dev/null', $sttyOutput, $sttyExitCode);
+        if ($sttyExitCode === 0 && isset($sttyOutput[0]) && preg_match('/^\d+\s+(\d+)$/', $sttyOutput[0], $matches) === 1) {
+            return (int) $matches[1];
+        }
+
+        return 120;
     }
 }
