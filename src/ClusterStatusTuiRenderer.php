@@ -1,0 +1,152 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mgrunder\CreateCluster;
+
+use PhpTui\Tui\Display\Display;
+use PhpTui\Tui\DisplayBuilder;
+use PhpTui\Tui\Extension\Core\Widget\GridWidget;
+use PhpTui\Tui\Extension\Core\Widget\ParagraphWidget;
+use PhpTui\Tui\Extension\Core\Widget\Table\TableRow;
+use PhpTui\Tui\Extension\Core\Widget\TableWidget;
+use PhpTui\Tui\Layout\Constraint;
+use PhpTui\Tui\Style\Modifier;
+use PhpTui\Tui\Style\Style;
+use PhpTui\Tui\Widget\Direction;
+use Throwable;
+
+final class ClusterStatusTuiRenderer
+{
+    private ?Display $display = null;
+    private ?int $viewportHeight = null;
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    public function render(array $shards, int $seedPort, bool $watchMode): bool
+    {
+        if (!$this->supportsCurrentOutput()) {
+            return false;
+        }
+
+        try {
+            $height = $this->calculateViewportHeight($shards);
+            if ($this->display === null || $this->viewportHeight !== $height) {
+                $this->display = DisplayBuilder::default()
+                    ->inline($height)
+                    ->build();
+                $this->viewportHeight = $height;
+            }
+
+            $this->display->draw($this->buildRootWidget($shards, $seedPort, $watchMode));
+        } catch (Throwable) {
+            $this->display = null;
+            $this->viewportHeight = null;
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private function supportsCurrentOutput(): bool
+    {
+        if (!function_exists('stream_isatty')) {
+            return false;
+        }
+
+        return stream_isatty(STDOUT);
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function calculateViewportHeight(array $shards): int
+    {
+        $rows = 1;
+        foreach ($shards as $shard) {
+            $rows += 1 + count($shard->replicas);
+        }
+
+        // 2 lines metadata, 1 spacer, then table rows + header.
+        return max(6, 3 + $rows);
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function buildRootWidget(array $shards, int $seedPort, bool $watchMode): GridWidget
+    {
+        $metadata = ParagraphWidget::fromString(implode("\n", [
+            sprintf('Cluster status (seed 127.0.0.1:%d)%s', $seedPort, $watchMode ? ' [watch]' : ''),
+            sprintf('Updated: %s', date('Y-m-d H:i:s')),
+        ]));
+
+        $table = TableWidget::default()
+            ->header($this->buildTableHeader())
+            ->rows(...$this->buildTableRows($shards))
+            ->widths(
+                Constraint::percentage(37),
+                Constraint::length(8),
+                Constraint::length(8),
+                Constraint::length(13),
+                Constraint::length(10),
+                Constraint::min(8),
+            );
+
+        return GridWidget::default()
+            ->direction(Direction::Vertical)
+            ->constraints(
+                Constraint::length(2),
+                Constraint::length(1),
+                Constraint::min(1),
+            )
+            ->widgets(
+                $metadata,
+                ParagraphWidget::fromString(''),
+                $table,
+            );
+    }
+
+    private function buildTableHeader(): TableRow
+    {
+        $header = TableRow::fromStrings('Node', 'ID', 'Role', 'Slots', 'Offset', 'Health');
+        $header->style = Style::default()->addModifier(Modifier::BOLD);
+
+        return $header;
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     * @return list<TableRow>
+     */
+    private function buildTableRows(array $shards): array
+    {
+        if ($shards === []) {
+            return [TableRow::fromStrings('No shard information returned.', '-', '-', '-', '-', '-')];
+        }
+
+        $rows = [];
+        foreach ($shards as $shard) {
+            $rows[] = $this->buildNodeRow($shard->master, 'master', $shard->slotRange());
+            foreach ($shard->replicas as $replica) {
+                $rows[] = $this->buildNodeRow($replica, 'replica', '-');
+            }
+        }
+
+        return $rows;
+    }
+
+    private function buildNodeRow(ClusterNodeStatus $node, string $role, string $slots): TableRow
+    {
+        return TableRow::fromStrings(
+            $node->address(),
+            $node->shortId(8),
+            $role,
+            $slots,
+            (string) $node->replicationOffset,
+            $node->health,
+        );
+    }
+}

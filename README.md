@@ -95,6 +95,6 @@ Run it directly:
 - For `start`, a single seed port auto-expands to contiguous ports:
   `7000..7003` for default replicas (`0`), or `3 * (replicas + 1)` ports when replicas are `>= 1`.
 - TLS mode generates ephemeral CA and server cert/key material for local testing.
-- `status` uses `CLUSTER SHARDS` and renders a terminal-width-aware overview of master/replica roles, slot ranges, replication offsets, and health.
+- `status` uses `CLUSTER SHARDS` and renders an interactive terminal table via `php-tui` (with a plain-text fallback when stdout is not a TTY).
 - `--watch` is supported for `status` and refreshes the terminal once per second.
 - PHAR builds require the `phar` extension and `phar.readonly=0` at build time.

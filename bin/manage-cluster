@@ -7,6 +7,7 @@ use Mgrunder\CreateCluster\ClusterManager;
 use Mgrunder\CreateCluster\ClusterShardsParser;
 use Mgrunder\CreateCluster\ClusterStateStore;
 use Mgrunder\CreateCluster\ClusterStatusRenderer;
+use Mgrunder\CreateCluster\ClusterStatusTuiRenderer;
 use Mgrunder\CreateCluster\CommandLineParser;
 use Mgrunder\CreateCluster\RedisNodeClient;
 use Mgrunder\CreateCluster\SystemInspector;
@@ -36,6 +37,7 @@ $manager = new ClusterManager(
     tlsMaterialGenerator: new TlsMaterialGenerator(),
     clusterShardsParser: new ClusterShardsParser(),
     clusterStatusRenderer: new ClusterStatusRenderer(),
+    clusterStatusTuiRenderer: new ClusterStatusTuiRenderer(),
 );
 
 try {

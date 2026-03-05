@@ -20,12 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `--watch` mode for `status` that refreshes output every second.
 - Added `ClusterShardsParser` and status DTOs in `src/` for parsing PhpRedis RESP2-style alternating key/value shard data.
 - Added PHPUnit coverage for shard parsing and RESP2 key/value zipping behavior.
+- Added `php-tui/php-tui` dependency for terminal UI rendering.
 
 ### Changed
 - Added README documentation for the new management utility and command usage.
 - Added README documentation for building and running the PHAR binary.
 - Updated `composer build-phar` to use the shim script and documented manual `/path/to/php -d phar.readonly=0 bin/build-phar` for advanced use.
 - Updated `bin/manage-cluster` wiring and CLI help text to include status/watch options.
+- Updated `status`/`--watch` rendering to use a `php-tui` table when stdout is a TTY, with a defensive plain-text fallback for non-interactive output.
 
 ### Deprecated
 - None.

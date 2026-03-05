@@ -16,6 +16,7 @@ final class ClusterManager
         private readonly TlsMaterialGenerator $tlsMaterialGenerator,
         private readonly ClusterShardsParser $clusterShardsParser,
         private readonly ClusterStatusRenderer $clusterStatusRenderer,
+        private readonly ClusterStatusTuiRenderer $clusterStatusTuiRenderer,
     ) {
     }
 
@@ -197,15 +198,24 @@ final class ClusterManager
             $rawShards = $this->readClusterShardsWithFallback($seedPort, $tls, $caCert);
             $shards = $this->clusterShardsParser->parse($rawShards);
 
-            if ($options->watch) {
-                $this->clearTerminal();
-            }
-            fwrite(STDOUT, $this->clusterStatusRenderer->render(
+            $renderedWithTui = $this->clusterStatusTuiRenderer->render(
                 shards: $shards,
-                width: $this->detectTerminalWidth(),
                 seedPort: $seedPort,
                 watchMode: $options->watch,
-            ));
+            );
+
+            if (!$renderedWithTui) {
+                if ($options->watch) {
+                    $this->clearTerminal();
+                }
+
+                fwrite(STDOUT, $this->clusterStatusRenderer->render(
+                    shards: $shards,
+                    width: $this->detectTerminalWidth(),
+                    seedPort: $seedPort,
+                    watchMode: $options->watch,
+                ));
+            }
 
             if (!$options->watch) {
                 return;
