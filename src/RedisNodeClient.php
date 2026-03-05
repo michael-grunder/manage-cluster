@@ -55,7 +55,7 @@ final class RedisNodeClient
 
         $ports = [];
         foreach (preg_split('/\R/', trim($raw)) as $line) {
-            if (!is_string($line) || trim($line) === '') {
+            if (trim($line) === '') {
                 continue;
             }
 
@@ -69,7 +69,7 @@ final class RedisNodeClient
                 $address = substr($address, 0, $at);
             }
 
-            if (!is_string($address) || $address === '') {
+            if ($address === '') {
                 continue;
             }
 

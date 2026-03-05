@@ -42,3 +42,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added defensive start-time checks for occupied ports and cluster shape validation before node launch.
 - Fixed status TUI column sizing so node IDs no longer run into role labels, and reduced excess spacing between the `Node` and `ID` columns.
 - Fixed `CLUSTER SHARDS` parsing to preserve full node IDs instead of truncating them during parsing.
+- Fixed redundant type checks in `RedisNodeClient::discoverClusterPorts()` flagged by PHPStan (`function.alreadyNarrowedType`).
