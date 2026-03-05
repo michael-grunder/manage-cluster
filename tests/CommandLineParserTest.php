@@ -51,8 +51,8 @@ final class CommandLineParserTest extends TestCase
         self::assertNotNull($options->fill);
         self::assertSame(1024 ** 3, $options->fill->sizeBytes);
         self::assertSame(['string', 'set', 'list', 'hash', 'zset'], $options->fill->types);
-        self::assertSame(8, $options->fill->members);
-        self::assertSame(256, $options->fill->memberSize);
+        self::assertSame(53, $options->fill->members);
+        self::assertSame(214749, $options->fill->memberSize);
         self::assertNull($options->fill->pinPrimaryPort);
     }
 
@@ -94,6 +94,17 @@ final class CommandLineParserTest extends TestCase
         $this->expectExceptionMessage('fill requires --size');
 
         $parser->parse(['bin/manage-cluster', 'fill', '7000']);
+    }
+
+    public function testFillKeepsFixedDefaultsWhenOnlyMembersIsProvided(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'fill', '--size', '1g', '--members', '32']);
+
+        self::assertNotNull($options->fill);
+        self::assertSame(32, $options->fill->members);
+        self::assertSame(256, $options->fill->memberSize);
     }
 
     public function testSizeIsRejectedOutsideFill(): void

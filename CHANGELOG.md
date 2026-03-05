@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated `bin/manage-cluster` wiring and CLI help text to include status/watch options.
 - Updated `bin/manage-cluster` wiring and CLI help text to include fill options and usage examples.
 - Updated README with `fill` examples, defaults, memory-size units, and primary pinning behavior.
+- Updated `fill` default sizing so when both `--members` and `--member-size` are omitted it derives larger per-key payloads from `--size` using a 5,000-key target.
 - Updated `fill` progress lines to a compact format: `[HH:MM:SS XX%] used/target, N keys`.
 - Updated `status`/`--watch` rendering to use a `php-tui` table when stdout is a TTY, with a defensive plain-text fallback for non-interactive output.
 - Updated status TUI rows to visually indent replicas with a `↳` prefix and shortened displayed node IDs to improve column readability.

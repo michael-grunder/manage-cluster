@@ -8,6 +8,12 @@ use InvalidArgumentException;
 
 final class CommandLineParser
 {
+    private const int DEFAULT_FILL_MEMBERS = 8;
+    private const int DEFAULT_FILL_MEMBER_SIZE = 256;
+    private const int DEFAULT_FILL_TARGET_KEYS = 5000;
+    private const int DEFAULT_FILL_TARGET_MEMBER_BYTES = 4096;
+    private const int DEFAULT_FILL_MAX_MEMBERS = 256;
+
     /**
      * @param list<string> $argv
      */
@@ -27,8 +33,8 @@ final class CommandLineParser
         $watch = false;
         $size = null;
         $types = ['string', 'set', 'list', 'hash', 'zset'];
-        $members = 8;
-        $memberSize = 256;
+        $members = self::DEFAULT_FILL_MEMBERS;
+        $memberSize = self::DEFAULT_FILL_MEMBER_SIZE;
         $pinPrimaryPort = null;
         $typesProvided = false;
         $membersProvided = false;
@@ -210,8 +216,13 @@ final class CommandLineParser
                 throw new InvalidArgumentException('fill requires --size (for example: --size 1g).');
             }
 
+            $sizeBytes = $this->parseSizeBytes($size);
+            if (!$membersProvided && !$memberSizeProvided) {
+                [$members, $memberSize] = $this->deriveAdaptiveFillShape($sizeBytes);
+            }
+
             $fillOptions = new FillOptions(
-                sizeBytes: $this->parseSizeBytes($size),
+                sizeBytes: $sizeBytes,
                 types: $types,
                 members: $members,
                 memberSize: $memberSize,
@@ -264,8 +275,8 @@ Options:
   --watch                      Refresh status output every second (status only)
   --size SIZE                  Fill target memory (bytes, kb, mb, gb, tb)
   --types CSV                  Fill key types: string,set,list,hash,zset
-  --members N                  Members per container key for fill (default: 8)
-  --member-size N              String size or per-key payload size in bytes (default: 256)
+  --members N                  Members per container key for fill (adaptive default from --size when both size knobs are omitted, otherwise 8)
+  --member-size N              String size or per-key payload size in bytes (adaptive default from --size when both size knobs are omitted, otherwise 256)
   --pin-primary PORT           Pin generated keys to one primary node
   -h, --help                   Show this help text
 
@@ -284,6 +295,23 @@ TXT;
     private static function isActionToken(string $value): bool
     {
         return in_array($value, ['start', 'stop', 'rebalance', 'status', 'flush', 'fill'], true);
+    }
+
+    /**
+     * @return array{int,int}
+     */
+    private function deriveAdaptiveFillShape(int $sizeBytes): array
+    {
+        $targetBytesPerKey = max(1, (int) ceil($sizeBytes / self::DEFAULT_FILL_TARGET_KEYS));
+        $members = max(
+            1,
+            min(
+                self::DEFAULT_FILL_MAX_MEMBERS,
+                (int) ceil($targetBytesPerKey / self::DEFAULT_FILL_TARGET_MEMBER_BYTES),
+            ),
+        );
+
+        return [$members, max(8, $targetBytesPerKey)];
     }
 
     /**
