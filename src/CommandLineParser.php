@@ -38,8 +38,9 @@ final class CommandLineParser
                 case '--stop':
                 case '--rebalance':
                 case '--status':
+                case '--flush':
                     if ($action !== null) {
-                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --rebalance, or --status.');
+                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --rebalance, --status, or --flush.');
                     }
 
                     $action = ltrim($arg, '-');
@@ -92,7 +93,7 @@ final class CommandLineParser
                             break;
                         }
 
-                        throw new InvalidArgumentException(sprintf('Specify start/stop/rebalance/status (or --start/--stop/--rebalance/--status) before ports (got: %s).', $arg));
+                        throw new InvalidArgumentException(sprintf('Specify start/stop/rebalance/status/flush (or --start/--stop/--rebalance/--status/--flush) before ports (got: %s).', $arg));
                     }
 
                     $portTokens[] = $arg;
@@ -101,7 +102,7 @@ final class CommandLineParser
         }
 
         if ($action === null) {
-            throw new InvalidArgumentException('Missing action: use start/stop/rebalance/status (or --start/--stop/--rebalance/--status).');
+            throw new InvalidArgumentException('Missing action: use start/stop/rebalance/status/flush (or --start/--stop/--rebalance/--status/--flush).');
         }
 
         if ($action === 'start' && $replicas < 0) {
@@ -152,10 +153,12 @@ Usage:
   bin/manage-cluster stop PORT [PORT ...]
   bin/manage-cluster rebalance PORT [PORT ...]
   bin/manage-cluster status PORT [--watch]
+  bin/manage-cluster flush PORT [PORT ...]
   bin/manage-cluster --start PORT [PORT ...] [--replicas N] [--tls]
   bin/manage-cluster --stop PORT [PORT ...]
   bin/manage-cluster --rebalance PORT [PORT ...]
   bin/manage-cluster --status PORT [--watch]
+  bin/manage-cluster --flush PORT [PORT ...]
 
 Options:
   --binary PATH                Path to redis-server (default: redis-server)
@@ -183,7 +186,7 @@ TXT;
 
     private static function isActionToken(string $value): bool
     {
-        return in_array($value, ['start', 'stop', 'rebalance', 'status'], true);
+        return in_array($value, ['start', 'stop', 'rebalance', 'status', 'flush'], true);
     }
 
     /**

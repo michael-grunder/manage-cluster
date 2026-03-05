@@ -111,6 +111,20 @@ final class RedisNodeClient
         }
     }
 
+    public function flushDb(int $port, bool $tls, ?string $caCert): void
+    {
+        $redis = $this->connect($port, $tls, $caCert);
+
+        try {
+            $response = $redis->rawCommand('FLUSHDB');
+            if ($response === false) {
+                throw new RuntimeException(sprintf('FLUSHDB failed on Redis node at port %d', $port));
+            }
+        } finally {
+            $redis->close();
+        }
+    }
+
     /**
      * @return array<mixed>
      */

@@ -225,6 +225,34 @@ final class ClusterManager
         }
     }
 
+    public function flush(CommandLineOptions $options): void
+    {
+        foreach ($this->resolveRequestedClusters($options->ports) as $metadata) {
+            $seedPort = $this->extractFirstPort($metadata);
+            $tls = (bool) ($metadata['tls'] ?? false);
+            $caCert = is_array($metadata['tls_material'] ?? null)
+                ? (is_string($metadata['tls_material']['ca_cert'] ?? null) ? $metadata['tls_material']['ca_cert'] : null)
+                : null;
+
+            $rawShards = $this->readClusterShardsWithFallback($seedPort, $tls, $caCert);
+            $shards = $this->clusterShardsParser->parse($rawShards);
+            $primaryPorts = $this->extractPrimaryPorts($shards);
+            if ($primaryPorts === []) {
+                throw new RuntimeException(sprintf('No primary nodes discovered for seed port %d.', $seedPort));
+            }
+
+            foreach ($primaryPorts as $port) {
+                $this->flushDbWithFallback($port, $tls, $caCert);
+            }
+
+            printf(
+                "Flushed cluster %s primary nodes: %s\n",
+                is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort),
+                implode(' ', array_map('strval', $primaryPorts)),
+            );
+        }
+    }
+
     /**
      * @param array{ca_cert: string, server_cert: string, server_key: string}|null $tlsMaterial
      */
@@ -351,6 +379,62 @@ final class ClusterManager
         sort($normalized, SORT_NUMERIC);
 
         return $normalized === [] ? [$seedPort] : $normalized;
+    }
+
+    /**
+     * @param list<int> $requestedPorts
+     * @return list<array<string, mixed>>
+     */
+    private function resolveRequestedClusters(array $requestedPorts): array
+    {
+        $clusters = [];
+        foreach ($requestedPorts as $port) {
+            $metadata = $this->stateStore->findClusterByPort($port);
+            if ($metadata === null) {
+                $clusters[sprintf('adhoc-%d', $port)] = [
+                    'id' => sprintf('adhoc-%d', $port),
+                    'ports' => [$port],
+                    'tls' => false,
+                    'tls_material' => null,
+                    'cluster_dir' => null,
+                ];
+
+                continue;
+            }
+
+            $id = is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('port-%d', $port);
+            $clusters[$id] = $metadata;
+        }
+
+        return array_values($clusters);
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     * @return list<int>
+     */
+    private function extractPrimaryPorts(array $shards): array
+    {
+        $ports = [];
+        foreach ($shards as $shard) {
+            $ports[$shard->master->port] = true;
+        }
+
+        $primaryPorts = array_map('intval', array_keys($ports));
+        sort($primaryPorts, SORT_NUMERIC);
+
+        return $primaryPorts;
+    }
+
+    private function flushDbWithFallback(int $port, bool $tls, ?string $caCert): void
+    {
+        try {
+            $this->redisNodeClient->flushDb($port, $tls, $caCert);
+
+            return;
+        } catch (\Throwable) {
+            $this->redisNodeClient->flushDb($port, !$tls, $caCert);
+        }
     }
 
     /**

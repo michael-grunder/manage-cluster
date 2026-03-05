@@ -58,6 +58,10 @@ try {
             $manager->status($options);
             break;
 
+        case 'flush':
+            $manager->flush($options);
+            break;
+
         default:
             throw new RuntimeException(sprintf('Unsupported action: %s', $options->action));
     }

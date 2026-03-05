@@ -1,6 +1,6 @@
 # create-cluster
 
-`bin/manage-cluster` starts, stops, rebalances, and inspects ephemeral local Redis Cluster instances.
+`bin/manage-cluster` starts, stops, rebalances, inspects, and flushes ephemeral local Redis Cluster instances.
 
 ## Requirements
 
@@ -34,6 +34,13 @@ Rebalance a running cluster using a seed node:
 
 ```bash
 bin/manage-cluster rebalance 7000
+```
+
+Flush DB data on every primary node in one or more clusters:
+
+```bash
+bin/manage-cluster flush 7000
+bin/manage-cluster flush 7000 8000
 ```
 
 Inspect cluster shard/node status from a seed node:
@@ -97,4 +104,5 @@ Run it directly:
 - TLS mode generates ephemeral CA and server cert/key material for local testing.
 - `status` uses `CLUSTER SHARDS` and renders an interactive terminal table via `php-tui` (with a plain-text fallback when stdout is not a TTY).
 - `--watch` is supported for `status` and refreshes the terminal once per second.
+- `flush` sends `FLUSHDB` to primary nodes only (replicas are not targeted directly).
 - PHAR builds require the `phar` extension and `phar.readonly=0` at build time.

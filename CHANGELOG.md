@@ -18,8 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added automatic single-port expansion for `start`: when one seed port is provided it now expands to contiguous ports (`4` ports for replicas `0`; otherwise `3 * (replicas + 1)` ports).
 - Added `status`/`--status` action that reads `CLUSTER SHARDS` and prints a compact, terminal-width-aware shard/node overview.
 - Added `--watch` mode for `status` that refreshes output every second.
+- Added `flush`/`--flush` action that sends `FLUSHDB` to each primary node in the specified cluster(s).
 - Added `ClusterShardsParser` and status DTOs in `src/` for parsing PhpRedis RESP2-style alternating key/value shard data.
 - Added PHPUnit coverage for shard parsing and RESP2 key/value zipping behavior.
+- Added PHPUnit coverage for command line parsing of the `flush` action.
 - Added `php-tui/php-tui` dependency for terminal UI rendering.
 
 ### Changed
@@ -39,3 +41,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Added defensive start-time checks for occupied ports and cluster shape validation before node launch.
 - Fixed status TUI column sizing so node IDs no longer run into role labels, and reduced excess spacing between the `Node` and `ID` columns.
+- Fixed `CLUSTER SHARDS` parsing to preserve full node IDs instead of truncating them during parsing.
