@@ -105,6 +105,8 @@ final class ClusterShardsParser
             return null;
         }
 
+        $id = substr($id, 0, 7);
+
         return new ClusterNodeStatus(
             id: $id,
             ip: (string) ($nodeMap['ip'] ?? ''),
