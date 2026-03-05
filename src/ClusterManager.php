@@ -316,7 +316,6 @@ final class ClusterManager
             $renderProgressOnSingleLine = $this->isInteractiveStdout();
             $clusterLabel = is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort);
             $this->renderFillProgress(
-                clusterLabel: $clusterLabel,
                 currentUsedBytes: $currentUsedBytes,
                 targetUsedBytes: $fill->sizeBytes,
                 keysAdded: 0,
@@ -369,7 +368,6 @@ final class ClusterManager
                     $currentUsedBytes = $this->sumUsedMemoryBytes($connections);
                     $lastProgressAt = $now;
                     $this->renderFillProgress(
-                        clusterLabel: $clusterLabel,
                         currentUsedBytes: $currentUsedBytes,
                         targetUsedBytes: $fill->sizeBytes,
                         keysAdded: $writes,
@@ -807,7 +805,6 @@ final class ClusterManager
     }
 
     private function renderFillProgress(
-        string $clusterLabel,
         int $currentUsedBytes,
         int $targetUsedBytes,
         int $keysAdded,
@@ -819,13 +816,12 @@ final class ClusterManager
             : 100.0;
 
         $message = sprintf(
-            'Filling %s: memory %s/%s (%.1f%%), keys added %s, elapsed %s',
-            $clusterLabel,
+            '[%s %.0f%%] %s/%s, %s keys',
+            $this->formatElapsed($elapsedSeconds),
+            $percent,
             $this->formatBytes($currentUsedBytes),
             $this->formatBytes($targetUsedBytes),
-            $percent,
             number_format($keysAdded),
-            $this->formatElapsed($elapsedSeconds),
         );
 
         if ($singleLine) {
