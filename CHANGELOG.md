@@ -12,10 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added automatic TLS material generation for test clusters started with `--tls`.
 - Added modular PHP implementation under `src/` for CLI parsing, state management, TLS generation, and Redis node orchestration.
 - Added `bin/build-phar` and `composer build-phar` for producing a single executable PHAR binary.
+- Added `bin/build-phar-shim` to run PHAR builds with `phar.readonly=0` using the default PHP binary.
+- Added a `Makefile` with `make build-phar` for the common PHAR build flow.
+- Added positional action parsing so `bin/manage-cluster start|stop|rebalance ...` works alongside the existing `--start|--stop|--rebalance` flags.
+- Added automatic single-port expansion for `start`: when one seed port is provided it now expands to contiguous ports (`4` ports for replicas `0`; otherwise `3 * (replicas + 1)` ports).
 
 ### Changed
 - Added README documentation for the new management utility and command usage.
 - Added README documentation for building and running the PHAR binary.
+- Updated `composer build-phar` to use the shim script and documented manual `/path/to/php -d phar.readonly=0 bin/build-phar` for advanced use.
 
 ### Deprecated
 - None.

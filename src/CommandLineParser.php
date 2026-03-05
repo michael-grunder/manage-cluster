@@ -81,7 +81,12 @@ final class CommandLineParser
                     }
 
                     if ($action === null) {
-                        throw new InvalidArgumentException(sprintf('Specify --start, --stop, or --rebalance before ports (got: %s).', $arg));
+                        if (self::isActionToken($arg)) {
+                            $action = $arg;
+                            break;
+                        }
+
+                        throw new InvalidArgumentException(sprintf('Specify start/stop/rebalance (or --start/--stop/--rebalance) before ports (got: %s).', $arg));
                     }
 
                     $portTokens[] = $arg;
@@ -90,7 +95,7 @@ final class CommandLineParser
         }
 
         if ($action === null) {
-            throw new InvalidArgumentException('Missing action: use --start, --stop, or --rebalance.');
+            throw new InvalidArgumentException('Missing action: use start/stop/rebalance (or --start/--stop/--rebalance).');
         }
 
         if ($action === 'start' && $replicas < 0) {
@@ -106,6 +111,9 @@ final class CommandLineParser
         }
 
         $ports = PortParser::parse($portTokens);
+        if ($action === 'start' && count($ports) === 1) {
+            $ports = $this->expandSingleStartPort($ports[0], $replicas);
+        }
 
         return new CommandLineOptions(
             action: $action,
@@ -125,6 +133,9 @@ final class CommandLineParser
     {
         return <<<'TXT'
 Usage:
+  bin/manage-cluster start PORT [PORT ...] [--replicas N] [--tls]
+  bin/manage-cluster stop PORT [PORT ...]
+  bin/manage-cluster rebalance PORT [PORT ...]
   bin/manage-cluster --start PORT [PORT ...] [--replicas N] [--tls]
   bin/manage-cluster --stop PORT [PORT ...]
   bin/manage-cluster --rebalance PORT [PORT ...]
@@ -132,7 +143,7 @@ Usage:
 Options:
   --binary PATH                Path to redis-server (default: redis-server)
   --redis-cli PATH             Path to redis-cli (default: redis-cli)
-  --replicas N                 Number of replicas per master for --start
+  --replicas N                 Number of replicas per master for start
   --cluster-announce-ip IP     Announce IP for the cluster nodes
   --tls                        Enable TLS-only redis instances
   --tls-days N                 TLS certificate validity in days (default: 3650)
@@ -144,7 +155,42 @@ Port tokens can be provided as:
   7000 7001 7002
   7000-7008
   {7000..7008}
+
+For start only:
+  A single seed port auto-expands to contiguous ports based on replicas.
+  Default replicas (0) expands to 4 ports.
+  Example: start 7000 --replicas 2 => {7000..7008}
 TXT;
+    }
+
+    private static function isActionToken(string $value): bool
+    {
+        return in_array($value, ['start', 'stop', 'rebalance'], true);
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function expandSingleStartPort(int $seedPort, int $replicas): array
+    {
+        $requiredNodeCount = $replicas === 0
+            ? 4
+            : (3 * ($replicas + 1));
+        $endPort = $seedPort + $requiredNodeCount - 1;
+
+        if ($endPort > 65535) {
+            throw new InvalidArgumentException(sprintf(
+                'Seed port %d with --replicas %d exceeds max port when expanded (%d).',
+                $seedPort,
+                $replicas,
+                $endPort,
+            ));
+        }
+
+        /** @var list<int> $ports */
+        $ports = range($seedPort, $endPort);
+
+        return $ports;
     }
 
     /**
