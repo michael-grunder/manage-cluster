@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added README documentation for the new management utility and command usage.
 - Added README documentation for building and running the PHAR binary.
 - Updated `composer build-phar` to use the shim script and documented manual `/path/to/php -d phar.readonly=0 bin/build-phar` for advanced use.
+- Updated `bin/build-phar` to emit timestamped progress messages while scanning files, adding archive contents, writing the stub, and finalizing the PHAR.
 - Updated `bin/manage-cluster` wiring and CLI help text to include status/watch options.
 - Updated `bin/manage-cluster` wiring and CLI help text to include fill options and usage examples.
 - Updated README with `fill` examples, defaults, memory-size units, and primary pinning behavior.

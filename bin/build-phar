@@ -53,14 +53,18 @@ if (file_exists($output) && !unlink($output)) {
     throw new \RuntimeException(sprintf('Failed to overwrite existing archive: %s', $output));
 }
 
+logProgress(sprintf('Building PHAR: %s', $output));
+
 $alias = 'manage-cluster.phar';
 $phar = new \Phar($output, 0, $alias);
 $phar->startBuffering();
 
+logProgress('Adding bin/manage-cluster');
 addFile($phar, $projectRoot, 'bin/manage-cluster');
 addDirectory($phar, $projectRoot, 'src');
 addDirectory($phar, $projectRoot, 'vendor');
 
+logProgress('Writing PHAR stub');
 $phar->setStub(<<<'PHP'
 #!/usr/bin/env php
 <?php
@@ -69,6 +73,7 @@ require 'phar://manage-cluster.phar/bin/manage-cluster';
 __HALT_COMPILER();
 PHP);
 
+logProgress('Finalizing archive');
 $phar->stopBuffering();
 
 if (!chmod($output, 0o755)) {
@@ -87,11 +92,14 @@ function addDirectory(\Phar $phar, string $projectRoot, string $relativeDirector
         throw new \RuntimeException(sprintf('Required directory does not exist: %s', $absoluteDirectory));
     }
 
+    logProgress(sprintf('Scanning %s', $relativeDirectory));
+
     $iterator = new \RecursiveIteratorIterator(
         new \RecursiveDirectoryIterator($absoluteDirectory, \RecursiveDirectoryIterator::SKIP_DOTS),
     );
 
     $files = [];
+    $scannedFiles = 0;
     foreach ($iterator as $fileInfo) {
         if (!$fileInfo->isFile()) {
             continue;
@@ -100,11 +108,24 @@ function addDirectory(\Phar $phar, string $projectRoot, string $relativeDirector
         $absolutePath = (string) $fileInfo->getPathname();
         $relativePath = ltrim(substr($absolutePath, strlen($projectRoot)), '/');
         $files[$relativePath] = $absolutePath;
+        $scannedFiles++;
+
+        if ($scannedFiles === 1 || $scannedFiles % 250 === 0) {
+            logProgress(sprintf('Scanned %s: %d file(s)', $relativeDirectory, $scannedFiles));
+        }
     }
 
+    logProgress(sprintf('Adding %d file(s) from %s', count($files), $relativeDirectory));
+
     ksort($files, SORT_STRING);
+    $addedFiles = 0;
     foreach ($files as $relativePath => $absolutePath) {
         $phar->addFile($absolutePath, $relativePath);
+        $addedFiles++;
+
+        if ($addedFiles === 1 || $addedFiles % 250 === 0 || $addedFiles === count($files)) {
+            logProgress(sprintf('Added %s: %d/%d file(s)', $relativeDirectory, $addedFiles, count($files)));
+        }
     }
 }
 
@@ -119,4 +140,9 @@ function addFile(\Phar $phar, string $projectRoot, string $relativePath): void
     }
 
     $phar->addFile($absolutePath, $relativePath);
+}
+
+function logProgress(string $message): void
+{
+    fwrite(STDERR, sprintf('[%s] %s%s', date('H:i:s'), $message, PHP_EOL));
 }
