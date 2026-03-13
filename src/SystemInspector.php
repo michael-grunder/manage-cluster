@@ -11,12 +11,27 @@ final class SystemInspector
 {
     public function ensureExecutableExists(string $binary, string $name): void
     {
+        if ($this->isExplicitPath($binary)) {
+            if (is_file($binary) && is_executable($binary)) {
+                return;
+            }
+
+            throw new RuntimeException(sprintf('%s executable not found: %s', $name, $binary));
+        }
+
         $finder = new ExecutableFinder();
         $path = $finder->find($binary);
 
         if ($path === null) {
             throw new RuntimeException(sprintf('%s executable not found: %s', $name, $binary));
         }
+    }
+
+    private function isExplicitPath(string $binary): bool
+    {
+        return str_contains($binary, DIRECTORY_SEPARATOR)
+            || (DIRECTORY_SEPARATOR !== '\\' && str_contains($binary, '\\'))
+            || preg_match('/^[A-Za-z]:[\\\\\\/]/', $binary) === 1;
     }
 
     public function isPortListening(int $port): bool
