@@ -8,6 +8,7 @@ use Mgrunder\CreateCluster\ClusterShardsParser;
 use Mgrunder\CreateCluster\ClusterStateStore;
 use Mgrunder\CreateCluster\ClusterStatusRenderer;
 use Mgrunder\CreateCluster\ClusterStatusTuiRenderer;
+use Mgrunder\CreateCluster\ConsoleOutput;
 use Mgrunder\CreateCluster\CommandLineParser;
 use Mgrunder\CreateCluster\RedisNodeClient;
 use Mgrunder\CreateCluster\SystemInspector;
@@ -30,6 +31,8 @@ try {
     exit(1);
 }
 
+$output = new ConsoleOutput();
+
 $manager = new ClusterManager(
     systemInspector: new SystemInspector(),
     stateStore: new ClusterStateStore($options->stateDir),
@@ -38,6 +41,7 @@ $manager = new ClusterManager(
     clusterShardsParser: new ClusterShardsParser(),
     clusterStatusRenderer: new ClusterStatusRenderer(),
     clusterStatusTuiRenderer: new ClusterStatusTuiRenderer(),
+    output: $output,
 );
 
 try {
@@ -74,6 +78,6 @@ try {
             throw new RuntimeException(sprintf('Unsupported action: %s', $options->action));
     }
 } catch (Throwable $e) {
-    fwrite(STDERR, sprintf("error: %s\n", $e->getMessage()));
+    $output->error($e->getMessage());
     exit(1);
 }

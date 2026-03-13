@@ -18,17 +18,20 @@ final class ClusterManager
         private readonly ClusterShardsParser $clusterShardsParser,
         private readonly ClusterStatusRenderer $clusterStatusRenderer,
         private readonly ClusterStatusTuiRenderer $clusterStatusTuiRenderer,
+        private readonly ConsoleOutput $output,
     ) {
     }
 
     public function start(CommandLineOptions $options): void
     {
+        $this->output->step('Validating required executables');
         $this->systemInspector->ensureExecutableExists($options->redisBinary, 'redis-server');
         $this->systemInspector->ensureExecutableExists($options->redisCliBinary, 'redis-cli');
 
         if ($options->tls) {
             $this->systemInspector->ensureExecutableExists('openssl', 'openssl');
         }
+        $this->output->success('Executable validation complete');
 
         $groupSize = $options->replicas + 1;
         if (count($options->ports) % $groupSize !== 0) {
@@ -49,24 +52,29 @@ final class ClusterManager
                 throw new RuntimeException(sprintf('Port %d is already in use.', $port));
             }
         }
+        $this->output->success(sprintf('Validated %d requested ports', count($options->ports)));
 
         $clusterDir = $this->stateStore->createClusterDirectory();
         $clusterId = basename($clusterDir);
+        $this->output->info(sprintf('Using cluster state directory %s', $clusterDir));
 
         $tlsMaterial = null;
         if ($options->tls) {
+            $this->output->step('Generating ephemeral TLS material');
             $tlsMaterial = $this->tlsMaterialGenerator->generate(
                 clusterDir: $clusterDir,
                 announceIp: $options->announceIp,
                 days: $options->tlsDays,
                 rsaBits: $options->tlsRsaBits,
             );
+            $this->output->success('TLS material generated');
         }
 
         $startedPorts = [];
 
         try {
             foreach ($options->ports as $port) {
+                $this->output->step(sprintf('Starting Redis node on port %d', $port));
                 $configPath = $this->writeNodeConfiguration(
                     clusterDir: $clusterDir,
                     port: $port,
@@ -78,10 +86,14 @@ final class ClusterManager
                 $this->runProcess([$options->redisBinary, $configPath]);
                 $this->redisNodeClient->waitForReady($port, $options->tls, $tlsMaterial['ca_cert'] ?? null);
                 $startedPorts[] = $port;
+                $this->output->success(sprintf('Redis node %d is ready', $port));
             }
 
+            $this->output->step('Creating cluster topology and assigning slots');
             $this->createCluster($options, $tlsMaterial);
+            $this->output->success('Cluster topology created');
         } catch (\Throwable $exception) {
+            $this->output->warning('Start failed; shutting down any nodes that were launched');
             foreach ($startedPorts as $startedPort) {
                 $this->redisNodeClient->shutdown($startedPort, $options->tls, $tlsMaterial['ca_cert'] ?? null);
             }
@@ -105,9 +117,9 @@ final class ClusterManager
 
         $this->stateStore->persistClusterMetadata($metadata);
 
-        printf("Started cluster %s\n", $clusterId);
-        printf("State: %s\n", $clusterDir);
-        printf("Ports: %s\n", implode(' ', array_map('strval', $options->ports)));
+        $this->output->success(sprintf('Started cluster %s', $clusterId));
+        $this->output->detail('State', $clusterDir);
+        $this->output->detail('Ports', implode(' ', array_map('strval', $options->ports)));
     }
 
     public function stop(CommandLineOptions $options): void
@@ -132,6 +144,8 @@ final class ClusterManager
         }
 
         foreach ($clusters as $metadata) {
+            $clusterLabel = is_string($metadata['id'] ?? null) ? $metadata['id'] : 'unknown';
+            $this->output->step(sprintf('Stopping cluster %s', $clusterLabel));
             $seed = $this->extractFirstPort($metadata);
             $tls = (bool) ($metadata['tls'] ?? false);
             $caCert = is_array($metadata['tls_material'] ?? null)
@@ -140,16 +154,22 @@ final class ClusterManager
 
             $ports = $this->discoverPortsForStop($seed, $tls, $caCert, $metadata);
             foreach ($ports as $clusterPort) {
+                $this->output->info(sprintf('Sending SHUTDOWN to port %d', $clusterPort));
                 $this->redisNodeClient->shutdown($clusterPort, $tls, $caCert);
             }
 
+            $this->output->step('Waiting for nodes to exit');
             $this->systemInspector->waitForPortsToClose($ports);
 
             if (is_string($metadata['cluster_dir'] ?? null)) {
                 $this->stateStore->removeClusterMetadata($metadata);
-                printf("Stopped cluster %s (%s)\n", $metadata['id'] ?? 'unknown', implode(' ', array_map('strval', $ports)));
+                $this->output->success(sprintf(
+                    'Stopped cluster %s (%s)',
+                    $clusterLabel,
+                    implode(' ', array_map('strval', $ports)),
+                ));
             } else {
-                printf("Stopped nodes: %s\n", implode(' ', array_map('strval', $ports)));
+                $this->output->success(sprintf('Stopped nodes: %s', implode(' ', array_map('strval', $ports))));
             }
         }
     }
@@ -180,9 +200,9 @@ final class ClusterManager
         $command[] = sprintf('127.0.0.1:%d', $seedPort);
         $command[] = '--cluster-yes';
 
+        $this->output->step(sprintf('Rebalancing cluster using seed 127.0.0.1:%d', $seedPort));
         $this->runProcess($command);
-
-        printf("Rebalanced cluster using seed 127.0.0.1:%d\n", $seedPort);
+        $this->output->success(sprintf('Rebalanced cluster using seed 127.0.0.1:%d', $seedPort));
     }
 
     public function status(CommandLineOptions $options): void
@@ -243,14 +263,15 @@ final class ClusterManager
             }
 
             foreach ($primaryPorts as $port) {
+                $this->output->info(sprintf('Flushing primary %d', $port));
                 $this->flushDbWithFallback($port, $tls, $caCert);
             }
 
-            printf(
-                "Flushed cluster %s primary nodes: %s\n",
+            $this->output->success(sprintf(
+                'Flushed cluster %s primary nodes: %s',
                 is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort),
                 implode(' ', array_map('strval', $primaryPorts)),
-            );
+            ));
         }
     }
 
@@ -292,12 +313,12 @@ final class ClusterManager
 
             $startUsedBytes = $this->sumUsedMemoryBytes($connections);
             if ($startUsedBytes >= $fill->sizeBytes) {
-                printf(
-                    "Cluster %s already at %s (target %s); no new keys generated.\n",
+                $this->output->info(sprintf(
+                    'Cluster %s already at %s (target %s); no new keys generated.',
                     is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort),
                     $this->formatBytes($startUsedBytes),
                     $this->formatBytes($fill->sizeBytes),
-                );
+                ));
 
                 return;
             }
@@ -313,8 +334,9 @@ final class ClusterManager
             $containerMemberSize = max(8, (int) ceil($fill->memberSize / $fill->members));
             $fillStartAt = microtime(true);
             $lastProgressAt = $fillStartAt;
-            $renderProgressOnSingleLine = $this->isInteractiveStdout();
+            $renderProgressOnSingleLine = $this->output->isInteractive();
             $clusterLabel = is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort);
+            $this->output->step(sprintf('Filling cluster %s', $clusterLabel));
             $this->renderFillProgress(
                 currentUsedBytes: $currentUsedBytes,
                 targetUsedBytes: $fill->sizeBytes,
@@ -378,20 +400,19 @@ final class ClusterManager
             }
 
             $endUsedBytes = $this->sumUsedMemoryBytes($connections);
-            if ($renderProgressOnSingleLine) {
-                fwrite(STDOUT, PHP_EOL);
-            }
+            $this->output->finishProgress();
 
-            printf(
-                "Filled cluster %s from %s to %s (target %s) with %d keys%s.\n",
+            $this->output->success(sprintf(
+                'Filled cluster %s from %s to %s (target %s) with %d keys%s.',
                 $clusterLabel,
                 $this->formatBytes($startUsedBytes),
                 $this->formatBytes($endUsedBytes),
                 $this->formatBytes($fill->sizeBytes),
                 $writes,
                 $fill->pinPrimaryPort !== null ? sprintf(' pinned to primary %d via {%s}', $fill->pinPrimaryPort, $pinnedTag) : '',
-            );
+            ));
         } finally {
+            $this->output->finishProgress();
             foreach ($connections as $connection) {
                 try {
                     $connection->close();
@@ -406,7 +427,7 @@ final class ClusterManager
         $this->systemInspector->ensureExecutableExists($options->redisBinary, 'redis-server');
 
         $primaryPort = $options->ports[0];
-        printf("Preparing replica for primary %d\n", $primaryPort);
+        $this->output->step(sprintf('Preparing replica for primary %d', $primaryPort));
 
         $metadata = $this->stateStore->findClusterByPort($primaryPort);
         [$tls, $caCert, $tlsMaterial, $rawShards] = $this->resolveSeedConnectionContext($primaryPort, $metadata);
@@ -428,7 +449,7 @@ final class ClusterManager
         }
 
         $clusterDir = $this->resolveReplicaClusterDirectory($primaryPort, $tls, $caCert, $metadata);
-        printf("Using cluster directory %s\n", $clusterDir);
+        $this->output->info(sprintf('Using cluster directory %s', $clusterDir));
 
         $configPath = $this->writeNodeConfiguration(
             clusterDir: $clusterDir,
@@ -438,23 +459,27 @@ final class ClusterManager
             tlsMaterial: $tlsMaterial,
         );
 
-        printf("Starting redis-server on port %d\n", $replicaPort);
+        $this->output->step(sprintf('Starting Redis node on port %d', $replicaPort));
         try {
             $this->runProcess([$options->redisBinary, $configPath]);
             $this->redisNodeClient->waitForReady($replicaPort, $tls, $caCert);
+            $this->output->success(sprintf('Redis node %d is ready', $replicaPort));
 
             $meetHost = $primaryNode->endpoint !== ''
                 ? $primaryNode->endpoint
                 : ($primaryNode->ip !== '' ? $primaryNode->ip : '127.0.0.1');
 
-            printf("Issuing CLUSTER MEET to %s:%d\n", $meetHost, $primaryNode->port);
+            $this->output->step(sprintf('Sending CLUSTER MEET to %s:%d', $meetHost, $primaryNode->port));
             $this->redisNodeClient->clusterMeet($replicaPort, $tls, $caCert, $meetHost, $primaryNode->port);
             $this->redisNodeClient->waitForKnownClusterNode($replicaPort, $tls, $caCert, $primaryNode->id);
+            $this->output->success('Replica joined cluster gossip');
 
-            printf("Issuing CLUSTER REPLICATE %s\n", $primaryNode->shortId());
+            $this->output->step(sprintf('Sending CLUSTER REPLICATE %s', $primaryNode->shortId()));
             $this->redisNodeClient->clusterReplicate($replicaPort, $tls, $caCert, $primaryNode->id);
             $this->waitForReplicaAttachment($primaryPort, $primaryPort, $replicaPort, $tls, $caCert);
+            $this->output->success(sprintf('Replica %d attached to primary %d', $replicaPort, $primaryPort));
         } catch (\Throwable $exception) {
+            $this->output->warning(sprintf('Replica setup failed; shutting down port %d', $replicaPort));
             $this->redisNodeClient->shutdown($replicaPort, $tls, $caCert);
             $this->systemInspector->waitForPortsToClose([$replicaPort]);
             throw $exception;
@@ -480,7 +505,6 @@ final class ClusterManager
             }
         }
 
-        printf("Replica %d attached to primary %d\n", $replicaPort, $primaryPort);
     }
 
     /**
@@ -1071,13 +1095,7 @@ final class ClusterManager
             number_format($keysAdded),
         );
 
-        if ($singleLine) {
-            fwrite(STDOUT, sprintf("\r\033[2K%s", $message));
-
-            return;
-        }
-
-        fwrite(STDOUT, $message . PHP_EOL);
+        $this->output->progress($message, $singleLine);
     }
 
     private function formatElapsed(float $elapsedSeconds): string
@@ -1170,7 +1188,7 @@ final class ClusterManager
 
     private function isInteractiveStdout(): bool
     {
-        return function_exists('stream_isatty') && stream_isatty(STDOUT);
+        return $this->output->isInteractive();
     }
 
     private function detectTerminalWidth(): int

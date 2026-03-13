@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated `bin/build-phar` to emit timestamped progress messages while scanning files, adding archive contents, writing the stub, and finalizing the PHAR.
 - Updated `bin/manage-cluster` wiring and CLI help text to include status/watch options.
 - Updated `bin/manage-cluster` wiring and CLI help text to include fill options and usage examples.
+- Updated lifecycle command output to report step-by-step progress, with rich ANSI colors/symbols on TTYs and plain log-style fallbacks otherwise.
 - Updated README with `fill` examples, defaults, memory-size units, and primary pinning behavior.
 - Updated `fill` default sizing so when both `--members` and `--member-size` are omitted it derives larger per-key payloads from `--size` using a 5,000-key target.
 - Updated `fill` sizing to accept `--keys` as an adaptive key-count target, influencing derived `--members` and `--member-size` when both are omitted.

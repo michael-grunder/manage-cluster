@@ -122,6 +122,7 @@ Run it directly:
 - `--watch` is supported for `status` and refreshes the terminal once per second.
 - `flush` sends `FLUSHDB` to primary nodes only (replicas are not targeted directly).
 - `add-replica` starts a new Redis node, runs `CLUSTER MEET`, then `CLUSTER REPLICATE` to attach it to the specified primary.
+- Lifecycle commands such as `start`, `stop`, `rebalance`, `flush`, `fill`, and `add-replica` emit step-by-step progress; when stdout is a TTY the CLI uses ANSI color, bold labels, and rich symbols, with plain log-style output as a fallback.
 - For `add-replica`, when `--port` is omitted, the tool discovers existing cluster ports and picks the first available listening-free port above the current cluster range.
 - `add-replica` reads `CONFIG GET dir` from the target primary; when the node directory is under `/tmp/manage-cluster`, new node files are created in the same cluster directory.
 - `fill` can run with no explicit seed port when exactly one managed cluster exists in the state store.
