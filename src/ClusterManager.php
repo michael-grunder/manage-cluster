@@ -57,6 +57,7 @@ final class ClusterManager
         $clusterDir = $this->stateStore->createClusterDirectory();
         $clusterId = basename($clusterDir);
         $this->output->info(sprintf('Using cluster state directory %s', $clusterDir));
+        $this->output->detail('Server', $this->systemInspector->describeServerBinary($options->redisBinary));
 
         $tlsMaterial = null;
         if ($options->tls) {

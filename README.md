@@ -115,6 +115,7 @@ Run it directly:
 - Cluster state and per-node ephemeral configs/logs are kept under `/tmp/manage-cluster` by default.
 - Use `--state-dir` to change where metadata and temporary cluster directories are created.
 - Start validates that requested ports are not already listening before launching nodes.
+- Start prints the resolved server flavor/version in a concise form such as `Redis 8.0.0 (e91a340e)` or `Valkey 8.1.0 (67c86837)`.
 - For `start`, a single seed port auto-expands to contiguous ports:
   `7000..7003` for default replicas (`0`), or `3 * (replicas + 1)` ports when replicas are `>= 1`.
 - TLS mode generates ephemeral CA and server cert/key material for local testing.
