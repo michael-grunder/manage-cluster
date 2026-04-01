@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added PHPUnit coverage for command line parsing of the `flush` action.
 - Added `php-tui/php-tui` dependency for terminal UI rendering.
 - Added `add-replica`/`--add-replica` action to start a new node and attach it to a specified primary with `CLUSTER MEET` + `CLUSTER REPLICATE`, including optional `--port` override.
+- Added `start` support for passing arbitrary raw `redis-server`/`valkey-server` arguments after `--`, applying them to each started node.
 
 ### Changed
 - Added README documentation for the new management utility and command usage.

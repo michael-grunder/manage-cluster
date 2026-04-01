@@ -84,7 +84,7 @@ final class ClusterManager
                     tlsMaterial: $tlsMaterial,
                 );
 
-                $this->runProcess([$options->redisBinary, $configPath]);
+                $this->runProcess([...[$options->redisBinary, $configPath], ...$options->startServerArgs]);
                 $this->redisNodeClient->waitForReady($port, $options->tls, $tlsMaterial['ca_cert'] ?? null);
                 $startedPorts[] = $port;
                 $this->output->success(sprintf('Redis node %d is ready', $port));

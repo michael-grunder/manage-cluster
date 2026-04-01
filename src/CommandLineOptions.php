@@ -8,6 +8,7 @@ final readonly class CommandLineOptions
 {
     /**
      * @param list<int> $ports
+     * @param list<string> $startServerArgs
      */
     public function __construct(
         public string $action,
@@ -23,6 +24,7 @@ final readonly class CommandLineOptions
         public string $stateDir,
         public bool $watch,
         public ?FillOptions $fill,
+        public array $startServerArgs,
     ) {
     }
 }

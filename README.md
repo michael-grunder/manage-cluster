@@ -24,6 +24,12 @@ Start with TLS:
 bin/manage-cluster start 7000 --replicas 1 --tls
 ```
 
+Start with additional raw `redis-server`/`valkey-server` arguments passed through after `--`:
+
+```bash
+bin/manage-cluster start {7000..7002} -- --enable-debug-command local
+```
+
 Stop a cluster by any member port (stops masters and replicas):
 
 ```bash
@@ -118,6 +124,7 @@ Run it directly:
 - Start prints the resolved server flavor/version in a concise form such as `Redis 8.0.0 (e91a340e)` or `Valkey 8.1.0 (67c86837)`.
 - For `start`, a single seed port auto-expands to contiguous ports:
   `7000..7003` for default replicas (`0`), or `3 * (replicas + 1)` ports when replicas are `>= 1`.
+- `start` accepts extra raw server arguments after `--`; they are appended to every `redis-server`/`valkey-server` launch command for that cluster.
 - TLS mode generates ephemeral CA and server cert/key material for local testing.
 - `status` uses `CLUSTER SHARDS` and renders an interactive terminal table via `php-tui` (with a plain-text fallback when stdout is not a TTY).
 - `--watch` is supported for `status` and refreshes the terminal once per second.

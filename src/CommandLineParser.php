@@ -32,6 +32,7 @@ final class CommandLineParser
         $tlsRsaBits = 2048;
         $stateDir = sprintf('%s/manage-cluster', sys_get_temp_dir());
         $watch = false;
+        $startServerArgs = [];
         $size = null;
         $types = ['string', 'set', 'list', 'hash', 'zset'];
         $members = self::DEFAULT_FILL_MEMBERS;
@@ -47,6 +48,11 @@ final class CommandLineParser
             $arg = $argv[$i];
 
             switch ($arg) {
+                case '--':
+                    $startServerArgs = array_slice($argv, $i + 1);
+                    $i = count($argv);
+                    break;
+
                 case '--help':
                 case '-h':
                     throw new InvalidArgumentException(self::usage());
@@ -171,6 +177,11 @@ final class CommandLineParser
         if ($watch && $action !== 'status') {
             throw new InvalidArgumentException('--watch can only be used with status.');
         }
+
+        if ($startServerArgs !== [] && $action !== 'start') {
+            throw new InvalidArgumentException('Arguments after -- can only be used with start.');
+        }
+
         if ($members <= 0) {
             throw new InvalidArgumentException('--members must be > 0.');
         }
@@ -277,6 +288,7 @@ final class CommandLineParser
             stateDir: $stateDir,
             watch: $watch,
             fill: $fillOptions,
+            startServerArgs: $startServerArgs,
         );
     }
 
@@ -284,14 +296,14 @@ final class CommandLineParser
     {
         return <<<'TXT'
 Usage:
-  bin/manage-cluster start PORT [PORT ...] [--replicas N] [--tls]
+  bin/manage-cluster start PORT [PORT ...] [--replicas N] [--tls] [-- REDIS_SERVER_ARG ...]
   bin/manage-cluster stop PORT [PORT ...]
   bin/manage-cluster rebalance PORT [PORT ...]
   bin/manage-cluster status PORT [--watch]
   bin/manage-cluster flush PORT [PORT ...]
   bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]
   bin/manage-cluster add-replica PRIMARY_PORT [--port PORT]
-  bin/manage-cluster --start PORT [PORT ...] [--replicas N] [--tls]
+  bin/manage-cluster --start PORT [PORT ...] [--replicas N] [--tls] [-- REDIS_SERVER_ARG ...]
   bin/manage-cluster --stop PORT [PORT ...]
   bin/manage-cluster --rebalance PORT [PORT ...]
   bin/manage-cluster --status PORT [--watch]
@@ -327,6 +339,8 @@ For start only:
   A single seed port auto-expands to contiguous ports based on replicas.
   Default replicas (0) expands to 4 ports.
   Example: start 7000 --replicas 2 => {7000..7008}
+  Additional redis-server/valkey-server args can be passed after `--`.
+  Example: start 7000 -- --enable-debug-command local
 TXT;
     }
 

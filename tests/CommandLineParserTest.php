@@ -149,6 +149,36 @@ final class CommandLineParserTest extends TestCase
         self::assertNull($options->replicaPort);
     }
 
+    public function testParsesStartServerArgsAfterDoubleDash(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse([
+            'bin/manage-cluster',
+            'start',
+            '7000',
+            '--',
+            '--enable-debug-command',
+            'local',
+            '--save',
+            '',
+        ]);
+
+        self::assertSame('start', $options->action);
+        self::assertSame([7000, 7001, 7002, 7003], $options->ports);
+        self::assertSame(['--enable-debug-command', 'local', '--save', ''], $options->startServerArgs);
+    }
+
+    public function testDoubleDashArgsAreRejectedOutsideStart(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Arguments after -- can only be used with start.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--', '--enable-debug-command', 'local']);
+    }
+
     public function testParsesAddReplicaWithExplicitReplicaPort(): void
     {
         $parser = new CommandLineParser();
