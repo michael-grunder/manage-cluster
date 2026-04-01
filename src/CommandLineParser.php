@@ -22,6 +22,7 @@ final class CommandLineParser
         $action = null;
         $portTokens = [];
         $replicaPort = null;
+        $generatedScriptPath = null;
 
         $replicas = 0;
         $redisBinary = getenv('BIN_REDIS') ?: 'redis-server';
@@ -73,6 +74,10 @@ final class CommandLineParser
 
                 case '--replicas':
                     $replicas = $this->parseIntOption($argv, ++$i, '--replicas');
+                    break;
+
+                case '--gen-script':
+                    $generatedScriptPath = $this->parseStringOption($argv, ++$i, '--gen-script');
                     break;
 
                 case '--binary':
@@ -230,6 +235,10 @@ final class CommandLineParser
             throw new InvalidArgumentException('--port can only be used with add-replica.');
         }
 
+        if ($action !== 'start' && $generatedScriptPath !== null) {
+            throw new InvalidArgumentException('--gen-script can only be used with start.');
+        }
+
         $ports = [];
         if ($portTokens !== []) {
             $ports = PortParser::parse($portTokens);
@@ -278,6 +287,7 @@ final class CommandLineParser
             action: $action,
             ports: $ports,
             replicaPort: $replicaPort,
+            generatedScriptPath: $generatedScriptPath,
             replicas: $replicas,
             redisBinary: $redisBinary,
             redisCliBinary: $redisCliBinary,
@@ -296,14 +306,14 @@ final class CommandLineParser
     {
         return <<<'TXT'
 Usage:
-  bin/manage-cluster start PORT [PORT ...] [--replicas N] [--tls] [-- REDIS_SERVER_ARG ...]
+  bin/manage-cluster start PORT [PORT ...] [--replicas N] [--tls] [--gen-script PATH] [-- REDIS_SERVER_ARG ...]
   bin/manage-cluster stop PORT [PORT ...]
   bin/manage-cluster rebalance PORT [PORT ...]
   bin/manage-cluster status PORT [--watch]
   bin/manage-cluster flush PORT [PORT ...]
   bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]
   bin/manage-cluster add-replica PRIMARY_PORT [--port PORT]
-  bin/manage-cluster --start PORT [PORT ...] [--replicas N] [--tls] [-- REDIS_SERVER_ARG ...]
+  bin/manage-cluster --start PORT [PORT ...] [--replicas N] [--tls] [--gen-script PATH] [-- REDIS_SERVER_ARG ...]
   bin/manage-cluster --stop PORT [PORT ...]
   bin/manage-cluster --rebalance PORT [PORT ...]
   bin/manage-cluster --status PORT [--watch]
@@ -315,6 +325,7 @@ Options:
   --binary PATH                Path to redis-server (default: redis-server)
   --redis-cli PATH             Path to redis-cli (default: redis-cli)
   --replicas N                 Number of replicas per master for start
+  --gen-script PATH            Write a shell script for start instead of launching now
   --cluster-announce-ip IP     Announce IP for the cluster nodes
   --tls                        Enable TLS-only redis instances
   --tls-days N                 TLS certificate validity in days (default: 3650)

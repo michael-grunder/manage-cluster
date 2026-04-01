@@ -166,7 +166,35 @@ final class CommandLineParserTest extends TestCase
 
         self::assertSame('start', $options->action);
         self::assertSame([7000, 7001, 7002, 7003], $options->ports);
+        self::assertNull($options->generatedScriptPath);
         self::assertSame(['--enable-debug-command', 'local', '--save', ''], $options->startServerArgs);
+    }
+
+    public function testParsesGeneratedStartScriptPath(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse([
+            'bin/manage-cluster',
+            '--gen-script',
+            'start-cluster.sh',
+            'start',
+            '{7000..7002}',
+        ]);
+
+        self::assertSame('start', $options->action);
+        self::assertSame([7000, 7001, 7002], $options->ports);
+        self::assertSame('start-cluster.sh', $options->generatedScriptPath);
+    }
+
+    public function testGenScriptIsRejectedOutsideStart(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--gen-script can only be used with start.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--gen-script', 'start.sh']);
     }
 
     public function testDoubleDashArgsAreRejectedOutsideStart(): void

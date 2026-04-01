@@ -18,6 +18,13 @@ Start a 9-node cluster with 2 replicas per master:
 bin/manage-cluster start 7000 --replicas 2
 ```
 
+Generate a standalone shell script for starting the requested cluster later:
+
+```bash
+bin/manage-cluster --gen-script start-cluster.sh start {7000..7002}
+./start-cluster.sh
+```
+
 Start with TLS:
 
 ```bash
@@ -125,6 +132,7 @@ Run it directly:
 - For `start`, a single seed port auto-expands to contiguous ports:
   `7000..7003` for default replicas (`0`), or `3 * (replicas + 1)` ports when replicas are `>= 1`.
 - `start` accepts extra raw server arguments after `--`; they are appended to every `redis-server`/`valkey-server` launch command for that cluster.
+- `start --gen-script PATH` writes an executable shell script instead of starting immediately. The generated script performs preflight checks for the requested executables and ports before launching nodes, emits progress messages while it runs, and preserves the cluster directory on failure for log inspection.
 - TLS mode generates ephemeral CA and server cert/key material for local testing.
 - `status` uses `CLUSTER SHARDS` and renders an interactive terminal table via `php-tui` (with a plain-text fallback when stdout is not a TTY).
 - `--watch` is supported for `status` and refreshes the terminal once per second.

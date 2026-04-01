@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `bin/manage-cluster` for starting, stopping, and rebalancing ephemeral Redis Cluster instances.
 - Added cluster state tracking in `/tmp/manage-cluster` (configurable via `--state-dir`) so `--stop` can terminate whole clusters by a seed port.
 - Added automatic TLS material generation for test clusters started with `--tls`.
+- Added `start --gen-script PATH` to emit an executable shell script that performs preflight checks, starts the requested Redis nodes, creates the cluster, and preserves logs/state when startup fails.
 - Added modular PHP implementation under `src/` for CLI parsing, state management, TLS generation, and Redis node orchestration.
 - Added `bin/build-phar` and `composer build-phar` for producing a single executable PHAR binary.
 - Added `bin/build-phar-shim` to run PHAR builds with `phar.readonly=0` using the default PHP binary.

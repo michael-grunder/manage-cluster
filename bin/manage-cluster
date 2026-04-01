@@ -11,6 +11,7 @@ use Mgrunder\CreateCluster\ClusterStatusTuiRenderer;
 use Mgrunder\CreateCluster\ConsoleOutput;
 use Mgrunder\CreateCluster\CommandLineParser;
 use Mgrunder\CreateCluster\RedisNodeClient;
+use Mgrunder\CreateCluster\StartScriptGenerator;
 use Mgrunder\CreateCluster\SystemInspector;
 use Mgrunder\CreateCluster\TlsMaterialGenerator;
 
@@ -38,6 +39,7 @@ $manager = new ClusterManager(
     stateStore: new ClusterStateStore($options->stateDir),
     redisNodeClient: new RedisNodeClient(),
     tlsMaterialGenerator: new TlsMaterialGenerator(),
+    startScriptGenerator: new StartScriptGenerator(),
     clusterShardsParser: new ClusterShardsParser(),
     clusterStatusRenderer: new ClusterStatusRenderer(),
     clusterStatusTuiRenderer: new ClusterStatusTuiRenderer(),

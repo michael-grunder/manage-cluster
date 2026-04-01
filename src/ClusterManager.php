@@ -15,6 +15,7 @@ final class ClusterManager
         private readonly ClusterStateStore $stateStore,
         private readonly RedisNodeClient $redisNodeClient,
         private readonly TlsMaterialGenerator $tlsMaterialGenerator,
+        private readonly StartScriptGenerator $startScriptGenerator,
         private readonly ClusterShardsParser $clusterShardsParser,
         private readonly ClusterStatusRenderer $clusterStatusRenderer,
         private readonly ClusterStatusTuiRenderer $clusterStatusTuiRenderer,
@@ -24,6 +25,12 @@ final class ClusterManager
 
     public function start(CommandLineOptions $options): void
     {
+        if ($options->generatedScriptPath !== null) {
+            $this->generateStartScript($options);
+
+            return;
+        }
+
         $this->output->step('Validating required executables');
         $this->systemInspector->ensureExecutableExists($options->redisBinary, 'redis-server');
         $this->systemInspector->ensureExecutableExists($options->redisCliBinary, 'redis-cli');
@@ -121,6 +128,32 @@ final class ClusterManager
         $this->output->success(sprintf('Started cluster %s', $clusterId));
         $this->output->detail('State', $clusterDir);
         $this->output->detail('Ports', implode(' ', array_map('strval', $options->ports)));
+    }
+
+    public function generateStartScript(CommandLineOptions $options): void
+    {
+        $path = $options->generatedScriptPath;
+        if ($path === null || $path === '') {
+            throw new RuntimeException('Missing generated script path.');
+        }
+
+        $directory = dirname($path);
+        if ($directory !== '' && $directory !== '.' && !is_dir($directory)) {
+            throw new RuntimeException(sprintf('Script output directory does not exist: %s', $directory));
+        }
+
+        $script = $this->startScriptGenerator->generate($options);
+
+        $this->output->step(sprintf('Writing start script to %s', $path));
+        if (file_put_contents($path, $script, LOCK_EX) === false) {
+            throw new RuntimeException(sprintf('Failed to write generated script: %s', $path));
+        }
+
+        if (!chmod($path, 0o755)) {
+            throw new RuntimeException(sprintf('Failed to make generated script executable: %s', $path));
+        }
+
+        $this->output->success(sprintf('Generated start script at %s', $path));
     }
 
     public function stop(CommandLineOptions $options): void
