@@ -8,6 +8,11 @@ use InvalidArgumentException;
 
 final class CommandLineParser
 {
+    /**
+     * @var list<string>
+     */
+    private const array ACTIONS = ['start', 'stop', 'kill', 'rebalance', 'status', 'flush', 'fill', 'add-replica', 'restart-replica'];
+
     private const int DEFAULT_FILL_MEMBERS = 8;
     private const int DEFAULT_FILL_MEMBER_SIZE = 256;
     private const int DEFAULT_FILL_TARGET_KEYS = 5000;
@@ -369,9 +374,146 @@ For start only:
 TXT;
     }
 
+    public static function contextualUsage(?string $action): string
+    {
+        return match ($action) {
+            'start' => <<<'TXT'
+Usage:
+  bin/manage-cluster start PORT [PORT ...] [--replicas N] [--tls] [--gen-script PATH] [-- REDIS_SERVER_ARG ...]
+
+Examples:
+  bin/manage-cluster start 7000
+  bin/manage-cluster start 7000 --replicas 1
+  bin/manage-cluster start 7000-7005 --tls
+  bin/manage-cluster start 7000 -- --enable-debug-command local
+TXT,
+            'stop' => <<<'TXT'
+Usage:
+  bin/manage-cluster stop PORT [PORT ...]
+
+Examples:
+  bin/manage-cluster stop 7000
+  bin/manage-cluster stop 7000-7005
+  bin/manage-cluster stop {7000..7008}
+TXT,
+            'kill' => <<<'TXT'
+Usage:
+  bin/manage-cluster kill PORT
+
+Examples:
+  bin/manage-cluster kill 7000
+TXT,
+            'rebalance' => <<<'TXT'
+Usage:
+  bin/manage-cluster rebalance PORT [PORT ...]
+
+Examples:
+  bin/manage-cluster rebalance 7000
+  bin/manage-cluster rebalance 7000-7005
+TXT,
+            'status' => <<<'TXT'
+Usage:
+  bin/manage-cluster status PORT [--watch]
+
+Examples:
+  bin/manage-cluster status 7000
+  bin/manage-cluster status 7000 --watch
+TXT,
+            'flush' => <<<'TXT'
+Usage:
+  bin/manage-cluster flush PORT [PORT ...]
+
+Examples:
+  bin/manage-cluster flush 7000
+  bin/manage-cluster flush 7000-7005
+TXT,
+            'fill' => <<<'TXT'
+Usage:
+  bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]
+
+Examples:
+  bin/manage-cluster fill --size 1g
+  bin/manage-cluster fill --size 5g --keys 20000
+  bin/manage-cluster fill 7000 --size 256m --types string,set --members 32 --member-size 2048
+  bin/manage-cluster fill 7000 --size 512m --pin-primary 7003
+
+Notes:
+  PORT is optional when exactly one managed cluster exists in the state store.
+  SIZE accepts raw bytes or k|m|g|t suffixes such as 512m, 1g, or 1048576.
+TXT,
+            'add-replica' => <<<'TXT'
+Usage:
+  bin/manage-cluster add-replica SEED_PORT [--port PORT]
+
+Examples:
+  bin/manage-cluster add-replica 7000
+  bin/manage-cluster add-replica 7000 --port 7010
+TXT,
+            'restart-replica' => <<<'TXT'
+Usage:
+  bin/manage-cluster restart-replica SEED_PORT
+
+Examples:
+  bin/manage-cluster restart-replica 7000
+TXT,
+            default => self::usage(),
+        };
+    }
+
+    /**
+     * @param list<string> $argv
+     */
+    public static function inferRequestedAction(array $argv): ?string
+    {
+        $optionsWithValues = [
+            '--replicas' => true,
+            '--gen-script' => true,
+            '--binary' => true,
+            '--redis-cli' => true,
+            '--cluster-announce-ip' => true,
+            '--tls-days' => true,
+            '--tls-rsa-bits' => true,
+            '--state-dir' => true,
+            '--size' => true,
+            '--types' => true,
+            '--members' => true,
+            '--member-size' => true,
+            '--keys' => true,
+            '--pin-primary' => true,
+            '--port' => true,
+        ];
+
+        for ($i = 1; $i < count($argv); $i++) {
+            $arg = $argv[$i];
+            if ($arg === '--') {
+                break;
+            }
+
+            if (isset($optionsWithValues[$arg])) {
+                $i++;
+                continue;
+            }
+
+            if (str_starts_with($arg, '--')) {
+                $candidate = ltrim($arg, '-');
+                if (self::isActionToken($candidate)) {
+                    return $candidate;
+                }
+
+                continue;
+            }
+
+            if (self::isActionToken($arg)) {
+                return $arg;
+            }
+        }
+
+        return null;
+    }
+
     private static function isActionToken(string $value): bool
     {
-        return in_array($value, ['start', 'stop', 'kill', 'rebalance', 'status', 'flush', 'fill', 'add-replica', 'restart-replica'], true);
+        return in_array($value, self::ACTIONS, true);
     }
 
     /**

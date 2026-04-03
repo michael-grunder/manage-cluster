@@ -10,6 +10,36 @@ use PHPUnit\Framework\TestCase;
 
 final class CommandLineParserTest extends TestCase
 {
+    public function testContextualUsageForFillIncludesExamples(): void
+    {
+        $usage = CommandLineParser::contextualUsage('fill');
+
+        self::assertStringContainsString('bin/manage-cluster fill [PORT] --size SIZE', $usage);
+        self::assertStringContainsString('bin/manage-cluster fill --size 1g', $usage);
+        self::assertStringContainsString('bin/manage-cluster fill 7000 --size 512m --pin-primary 7003', $usage);
+    }
+
+    public function testInferRequestedActionFindsPositionalAction(): void
+    {
+        $action = CommandLineParser::inferRequestedAction(['bin/manage-cluster', 'fill', '--size', '1g']);
+
+        self::assertSame('fill', $action);
+    }
+
+    public function testInferRequestedActionFindsLongFlagAction(): void
+    {
+        $action = CommandLineParser::inferRequestedAction(['bin/manage-cluster', '--fill', '7000', '--size', '1g']);
+
+        self::assertSame('fill', $action);
+    }
+
+    public function testInferRequestedActionSkipsOptionValues(): void
+    {
+        $action = CommandLineParser::inferRequestedAction(['bin/manage-cluster', '--gen-script', 'fill', 'start', '7000']);
+
+        self::assertSame('start', $action);
+    }
+
     public function testParsesFlushActionWithLongFlag(): void
     {
         $parser = new CommandLineParser();

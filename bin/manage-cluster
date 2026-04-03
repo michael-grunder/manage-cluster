@@ -29,8 +29,9 @@ if (in_array('--help', $argv, true) || in_array('-h', $argv, true)) {
 try {
     $options = $parser->parse($argv);
 } catch (InvalidArgumentException $e) {
+    $action = CommandLineParser::inferRequestedAction($argv);
     fwrite(STDERR, $e->getMessage() . PHP_EOL . PHP_EOL);
-    fwrite(STDERR, CommandLineParser::usage() . PHP_EOL);
+    fwrite(STDERR, CommandLineParser::contextualUsage($action) . PHP_EOL);
     exit(1);
 }
 

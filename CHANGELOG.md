@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `start` support for passing arbitrary raw `redis-server`/`valkey-server` arguments after `--`, applying them to each started node.
 
 ### Changed
+- Updated underspecified command failures to print command-specific help with focused usage examples instead of always falling back to the generic CLI help text.
 - Updated README and CLI help text for the new `restart-replica` action.
 - Updated README and CLI help text for the new `kill` command and the interactive `add-replica` flow.
 - Added README documentation for the new management utility and command usage.
