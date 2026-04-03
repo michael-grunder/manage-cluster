@@ -60,13 +60,14 @@ final class CommandLineParser
 
                 case '--start':
                 case '--stop':
+                case '--kill':
                 case '--rebalance':
                 case '--status':
                 case '--flush':
                 case '--fill':
                 case '--add-replica':
                     if ($action !== null) {
-                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --rebalance, --status, --flush, --fill, or --add-replica.');
+                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --kill, --rebalance, --status, --flush, --fill, or --add-replica.');
                     }
 
                     $action = ltrim($arg, '-');
@@ -155,7 +156,7 @@ final class CommandLineParser
                             break;
                         }
 
-                        throw new InvalidArgumentException(sprintf('Specify start/stop/rebalance/status/flush/fill/add-replica (or --start/--stop/--rebalance/--status/--flush/--fill/--add-replica) before ports (got: %s).', $arg));
+                        throw new InvalidArgumentException(sprintf('Specify start/stop/kill/rebalance/status/flush/fill/add-replica (or --start/--stop/--kill/--rebalance/--status/--flush/--fill/--add-replica) before ports (got: %s).', $arg));
                     }
 
                     $portTokens[] = $arg;
@@ -164,7 +165,7 @@ final class CommandLineParser
         }
 
         if ($action === null) {
-            throw new InvalidArgumentException('Missing action: use start/stop/rebalance/status/flush/fill/add-replica (or --start/--stop/--rebalance/--status/--flush/--fill/--add-replica).');
+            throw new InvalidArgumentException('Missing action: use start/stop/kill/rebalance/status/flush/fill/add-replica (or --start/--stop/--kill/--rebalance/--status/--flush/--fill/--add-replica).');
         }
 
         if ($action === 'start' && $replicas < 0) {
@@ -255,12 +256,16 @@ final class CommandLineParser
             throw new InvalidArgumentException('status expects exactly one seed port.');
         }
 
+        if ($action === 'kill' && count($ports) !== 1) {
+            throw new InvalidArgumentException('kill expects exactly one seed port.');
+        }
+
         if ($action === 'fill' && count($ports) > 1) {
             throw new InvalidArgumentException('fill expects zero or one seed port.');
         }
 
         if ($action === 'add-replica' && count($ports) !== 1) {
-            throw new InvalidArgumentException('add-replica expects exactly one primary port.');
+            throw new InvalidArgumentException('add-replica expects exactly one seed port.');
         }
 
         $fillOptions = null;
@@ -308,18 +313,20 @@ final class CommandLineParser
 Usage:
   bin/manage-cluster start PORT [PORT ...] [--replicas N] [--tls] [--gen-script PATH] [-- REDIS_SERVER_ARG ...]
   bin/manage-cluster stop PORT [PORT ...]
+  bin/manage-cluster kill PORT
   bin/manage-cluster rebalance PORT [PORT ...]
   bin/manage-cluster status PORT [--watch]
   bin/manage-cluster flush PORT [PORT ...]
   bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]
-  bin/manage-cluster add-replica PRIMARY_PORT [--port PORT]
+  bin/manage-cluster add-replica SEED_PORT [--port PORT]
   bin/manage-cluster --start PORT [PORT ...] [--replicas N] [--tls] [--gen-script PATH] [-- REDIS_SERVER_ARG ...]
   bin/manage-cluster --stop PORT [PORT ...]
+  bin/manage-cluster --kill PORT
   bin/manage-cluster --rebalance PORT [PORT ...]
   bin/manage-cluster --status PORT [--watch]
   bin/manage-cluster --flush PORT [PORT ...]
   bin/manage-cluster --fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]
-  bin/manage-cluster --add-replica PRIMARY_PORT [--port PORT]
+  bin/manage-cluster --add-replica SEED_PORT [--port PORT]
 
 Options:
   --binary PATH                Path to redis-server (default: redis-server)
@@ -357,7 +364,7 @@ TXT;
 
     private static function isActionToken(string $value): bool
     {
-        return in_array($value, ['start', 'stop', 'rebalance', 'status', 'flush', 'fill', 'add-replica'], true);
+        return in_array($value, ['start', 'stop', 'kill', 'rebalance', 'status', 'flush', 'fill', 'add-replica'], true);
     }
 
     /**

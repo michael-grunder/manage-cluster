@@ -30,6 +30,26 @@ final class CommandLineParserTest extends TestCase
         self::assertSame([7000], $options->ports);
     }
 
+    public function testParsesKillActionAsPositionalToken(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'kill', '7000']);
+
+        self::assertSame('kill', $options->action);
+        self::assertSame([7000], $options->ports);
+    }
+
+    public function testKillRequiresExactlyOneSeedPort(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('kill expects exactly one seed port.');
+
+        $parser->parse(['bin/manage-cluster', 'kill', '7000', '7001']);
+    }
+
     public function testWatchIsRejectedForFlush(): void
     {
         $parser = new CommandLineParser();
@@ -218,12 +238,12 @@ final class CommandLineParserTest extends TestCase
         self::assertSame(7010, $options->replicaPort);
     }
 
-    public function testAddReplicaRequiresExactlyOnePrimaryPort(): void
+    public function testAddReplicaRequiresExactlyOneSeedPort(): void
     {
         $parser = new CommandLineParser();
 
         $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('add-replica expects exactly one primary port.');
+        $this->expectExceptionMessage('add-replica expects exactly one seed port.');
 
         $parser->parse(['bin/manage-cluster', 'add-replica', '7000', '7001']);
     }

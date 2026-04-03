@@ -19,6 +19,7 @@ final class ClusterManager
         private readonly ClusterShardsParser $clusterShardsParser,
         private readonly ClusterStatusRenderer $clusterStatusRenderer,
         private readonly ClusterStatusTuiRenderer $clusterStatusTuiRenderer,
+        private readonly ClusterTreeSelector $clusterTreeSelector,
         private readonly ConsoleOutput $output,
     ) {
     }
@@ -237,6 +238,35 @@ final class ClusterManager
         $this->output->step(sprintf('Rebalancing cluster using seed 127.0.0.1:%d', $seedPort));
         $this->runProcess($command);
         $this->output->success(sprintf('Rebalanced cluster using seed 127.0.0.1:%d', $seedPort));
+    }
+
+    public function kill(CommandLineOptions $options): void
+    {
+        if (!$this->clusterTreeSelector->supportsInteractiveSelection()) {
+            throw new RuntimeException('kill needs an interactive TTY to choose a cluster node.');
+        }
+
+        $seedPort = $options->ports[0];
+        $metadata = $this->stateStore->findClusterByPort($seedPort);
+        [$tls, $caCert, , $rawShards] = $this->resolveSeedConnectionContext($seedPort, $metadata);
+        $shards = $this->clusterShardsParser->parse($rawShards);
+
+        $selectedNode = $this->clusterTreeSelector->select(
+            shards: $shards,
+            seedPort: $seedPort,
+            mode: ClusterTreeViewMode::AllNodes,
+            title: 'Select a cluster node to shut down',
+        );
+
+        if (!$selectedNode instanceof ClusterNodeStatus) {
+            throw new RuntimeException('Kill cancelled.');
+        }
+
+        $this->output->step(sprintf('Sending SHUTDOWN to %s', $selectedNode->address()));
+        $this->redisNodeClient->shutdown($selectedNode->port, $tls, $caCert);
+        $this->systemInspector->waitForPortsToClose([$selectedNode->port]);
+        $this->persistClusterMetadataPortRemoval($metadata, $selectedNode->port);
+        $this->output->success(sprintf('Stopped cluster node %s', $selectedNode->address()));
     }
 
     public function status(CommandLineOptions $options): void
@@ -460,17 +490,20 @@ final class ClusterManager
     {
         $this->systemInspector->ensureExecutableExists($options->redisBinary, 'redis-server');
 
-        $primaryPort = $options->ports[0];
-        $this->output->step(sprintf('Preparing replica for primary %d', $primaryPort));
+        $seedPort = $options->ports[0];
+        $this->output->step(sprintf('Preparing replica using seed %d', $seedPort));
 
-        $metadata = $this->stateStore->findClusterByPort($primaryPort);
-        [$tls, $caCert, $tlsMaterial, $rawShards] = $this->resolveSeedConnectionContext($primaryPort, $metadata);
+        $metadata = $this->stateStore->findClusterByPort($seedPort);
+        [$tls, $caCert, $tlsMaterial, $rawShards] = $this->resolveSeedConnectionContext($seedPort, $metadata);
         $shards = $this->clusterShardsParser->parse($rawShards);
 
-        $primaryNode = $this->findPrimaryNodeByPort($shards, $primaryPort);
+        $primaryNode = $this->selectPrimaryForReplicaCreation($shards, $seedPort);
         if (!$primaryNode instanceof ClusterNodeStatus) {
-            throw new RuntimeException(sprintf('Port %d is not a primary node in the target cluster.', $primaryPort));
+            throw new RuntimeException(sprintf('Unable to resolve a primary node from seed port %d.', $seedPort));
         }
+
+        $primaryPort = $primaryNode->port;
+        $this->output->info(sprintf('Selected primary %s', $primaryNode->address()));
 
         $usedPorts = $this->extractClusterPorts($shards);
         $replicaPort = $options->replicaPort ?? $this->selectReplicaPortOutsideClusterRange($usedPorts);
@@ -510,7 +543,7 @@ final class ClusterManager
 
             $this->output->step(sprintf('Sending CLUSTER REPLICATE %s', $primaryNode->shortId()));
             $this->redisNodeClient->clusterReplicate($replicaPort, $tls, $caCert, $primaryNode->id);
-            $this->waitForReplicaAttachment($primaryPort, $primaryPort, $replicaPort, $tls, $caCert);
+            $this->waitForReplicaAttachment($seedPort, $primaryPort, $replicaPort, $tls, $caCert);
             $this->output->success(sprintf('Replica %d attached to primary %d', $replicaPort, $primaryPort));
         } catch (\Throwable $exception) {
             $this->output->warning(sprintf('Replica setup failed; shutting down port %d', $replicaPort));
@@ -538,7 +571,6 @@ final class ClusterManager
                 $this->stateStore->persistClusterMetadata($metadata);
             }
         }
-
     }
 
     /**
@@ -644,6 +676,28 @@ final class ClusterManager
         }
 
         return null;
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function selectPrimaryForReplicaCreation(array $shards, int $seedPort): ?ClusterNodeStatus
+    {
+        if ($this->clusterTreeSelector->supportsInteractiveSelection()) {
+            return $this->clusterTreeSelector->select(
+                shards: $shards,
+                seedPort: $seedPort,
+                mode: ClusterTreeViewMode::PrimariesOnly,
+                title: 'Select a primary to receive a new replica',
+            );
+        }
+
+        $primaryNode = $this->findPrimaryNodeByPort($shards, $seedPort);
+        if ($primaryNode instanceof ClusterNodeStatus) {
+            return $primaryNode;
+        }
+
+        throw new RuntimeException('add-replica needs an interactive TTY when the provided seed port is not already a primary.');
     }
 
     /**
@@ -1190,6 +1244,47 @@ final class ClusterManager
         }
 
         return (int) $port;
+    }
+
+    /**
+     * @param array<string, mixed>|null $metadata
+     */
+    private function persistClusterMetadataPortRemoval(?array $metadata, int $port): void
+    {
+        if (!is_array($metadata)) {
+            return;
+        }
+
+        $ports = $metadata['ports'] ?? null;
+        if (!is_array($ports)) {
+            return;
+        }
+
+        $normalized = [];
+        foreach ($ports as $candidate) {
+            if (!is_int($candidate) && !is_string($candidate)) {
+                continue;
+            }
+
+            $candidatePort = (int) $candidate;
+            if ($candidatePort === $port) {
+                continue;
+            }
+
+            $normalized[] = $candidatePort;
+        }
+
+        $normalized = array_values(array_unique($normalized));
+        sort($normalized, SORT_NUMERIC);
+
+        if ($normalized === []) {
+            $this->stateStore->removeClusterMetadata($metadata);
+
+            return;
+        }
+
+        $metadata['ports'] = $normalized;
+        $this->stateStore->persistClusterMetadata($metadata);
     }
 
     /**

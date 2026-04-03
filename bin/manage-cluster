@@ -8,6 +8,8 @@ use Mgrunder\CreateCluster\ClusterShardsParser;
 use Mgrunder\CreateCluster\ClusterStateStore;
 use Mgrunder\CreateCluster\ClusterStatusRenderer;
 use Mgrunder\CreateCluster\ClusterStatusTuiRenderer;
+use Mgrunder\CreateCluster\ClusterTreeSelector;
+use Mgrunder\CreateCluster\ClusterTreeViewBuilder;
 use Mgrunder\CreateCluster\ConsoleOutput;
 use Mgrunder\CreateCluster\CommandLineParser;
 use Mgrunder\CreateCluster\RedisNodeClient;
@@ -43,6 +45,7 @@ $manager = new ClusterManager(
     clusterShardsParser: new ClusterShardsParser(),
     clusterStatusRenderer: new ClusterStatusRenderer(),
     clusterStatusTuiRenderer: new ClusterStatusTuiRenderer(),
+    clusterTreeSelector: new ClusterTreeSelector(new ClusterTreeViewBuilder()),
     output: $output,
 );
 
@@ -54,6 +57,10 @@ try {
 
         case 'stop':
             $manager->stop($options);
+            break;
+
+        case 'kill':
+            $manager->kill($options);
             break;
 
         case 'rebalance':

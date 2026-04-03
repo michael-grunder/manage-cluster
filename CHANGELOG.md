@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 ### Added
+- Added `kill`/`--kill` action with an interactive cluster tree view for selecting and shutting down a single primary or replica from any seed node.
+- Added an interactive primary-selection view for `add-replica`, so the command can start from any cluster seed instead of requiring the target primary port.
 - Added GitHub Actions workflows for PHP CI on `8.4` and `8.5`, plus automated PHAR build artifacts and tagged release attachments.
 - Added `phpunit.xml` so `vendor/bin/phpunit` discovers the default test suite and Composer bootstrap without extra CLI arguments.
 - Added `bin/manage-cluster` for starting, stopping, and rebalancing ephemeral Redis Cluster instances.
@@ -32,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `start` support for passing arbitrary raw `redis-server`/`valkey-server` arguments after `--`, applying them to each started node.
 
 ### Changed
+- Updated README and CLI help text for the new `kill` command and the interactive `add-replica` flow.
 - Added README documentation for the new management utility and command usage.
 - Added README documentation for building and running the PHAR binary.
 - Updated `composer build-phar` to use the shim script and documented manual `/path/to/php -d phar.readonly=0 bin/build-phar` for advanced use.

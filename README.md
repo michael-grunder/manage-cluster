@@ -1,6 +1,6 @@
 # create-cluster
 
-`bin/manage-cluster` starts, stops, rebalances, inspects, flushes, fills, and adds replicas to ephemeral local Redis Cluster instances.
+`bin/manage-cluster` starts, stops, kills individual nodes, rebalances, inspects, flushes, fills, and adds replicas to ephemeral local Redis Cluster instances.
 
 ## Requirements
 
@@ -49,7 +49,13 @@ Rebalance a running cluster using a seed node:
 bin/manage-cluster rebalance 7000
 ```
 
-Add a replica to an existing primary (auto-selecting a new port outside current cluster range):
+Kill a specific node from an interactive tree rooted at any cluster seed:
+
+```bash
+bin/manage-cluster kill 7000
+```
+
+Add a replica to an existing cluster by selecting a primary from an interactive primary list (auto-selecting a new port outside current cluster range):
 
 ```bash
 bin/manage-cluster add-replica 7000
@@ -140,11 +146,13 @@ the archive to the corresponding GitHub release.
 - TLS mode generates ephemeral CA and server cert/key material for local testing.
 - `status` uses `CLUSTER SHARDS` and renders an interactive terminal table via `php-tui` (with a plain-text fallback when stdout is not a TTY).
 - `--watch` is supported for `status` and refreshes the terminal once per second.
+- `kill` opens an interactive cluster tree view showing primaries followed by their replicas, then sends `SHUTDOWN` to the selected node.
 - `flush` sends `FLUSHDB` to primary nodes only (replicas are not targeted directly).
-- `add-replica` starts a new Redis node, runs `CLUSTER MEET`, then `CLUSTER REPLICATE` to attach it to the specified primary.
-- Lifecycle commands such as `start`, `stop`, `rebalance`, `flush`, `fill`, and `add-replica` emit step-by-step progress; when stdout is a TTY the CLI uses ANSI color, bold labels, and rich symbols, with plain log-style output as a fallback.
+- `add-replica` opens an interactive primary-only view, then starts a new Redis node, runs `CLUSTER MEET`, and `CLUSTER REPLICATE` to attach it to the selected primary.
+- Lifecycle commands such as `start`, `stop`, `kill`, `rebalance`, `flush`, `fill`, and `add-replica` emit step-by-step progress; when stdout is a TTY the CLI uses ANSI color, bold labels, and rich symbols, with plain log-style output as a fallback.
 - For `add-replica`, when `--port` is omitted, the tool discovers existing cluster ports and picks the first available listening-free port above the current cluster range.
 - `add-replica` reads `CONFIG GET dir` from the target primary; when the node directory is under `/tmp/manage-cluster`, new node files are created in the same cluster directory.
+- The interactive `kill` and `add-replica` views support `↑`/`↓` or `j`/`k`, `Enter` to confirm, and `q`/`Esc` to cancel.
 - `fill` can run with no explicit seed port when exactly one managed cluster exists in the state store.
 - `fill` supports `--size` units: raw bytes or `k|m|g|t` suffixes (optional trailing `b`), for example `1048576`, `512m`, `1gb`.
 - `fill` defaults to random key generation across `string,set,list,hash,zset`; use `--types` CSV to constrain types.
