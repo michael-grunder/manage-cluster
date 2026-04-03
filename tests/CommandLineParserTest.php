@@ -169,6 +169,16 @@ final class CommandLineParserTest extends TestCase
         self::assertNull($options->replicaPort);
     }
 
+    public function testParsesRestartReplicaActionAsPositionalToken(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'restart-replica', '7000']);
+
+        self::assertSame('restart-replica', $options->action);
+        self::assertSame([7000], $options->ports);
+    }
+
     public function testParsesStartServerArgsAfterDoubleDash(): void
     {
         $parser = new CommandLineParser();
@@ -246,6 +256,16 @@ final class CommandLineParserTest extends TestCase
         $this->expectExceptionMessage('add-replica expects exactly one seed port.');
 
         $parser->parse(['bin/manage-cluster', 'add-replica', '7000', '7001']);
+    }
+
+    public function testRestartReplicaRequiresExactlyOneSeedPort(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('restart-replica expects exactly one seed port.');
+
+        $parser->parse(['bin/manage-cluster', 'restart-replica', '7000', '7001']);
     }
 
     public function testPortOptionIsRejectedOutsideAddReplica(): void

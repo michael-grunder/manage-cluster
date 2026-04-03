@@ -66,8 +66,9 @@ final class CommandLineParser
                 case '--flush':
                 case '--fill':
                 case '--add-replica':
+                case '--restart-replica':
                     if ($action !== null) {
-                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --kill, --rebalance, --status, --flush, --fill, or --add-replica.');
+                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --kill, --rebalance, --status, --flush, --fill, --add-replica, or --restart-replica.');
                     }
 
                     $action = ltrim($arg, '-');
@@ -156,7 +157,7 @@ final class CommandLineParser
                             break;
                         }
 
-                        throw new InvalidArgumentException(sprintf('Specify start/stop/kill/rebalance/status/flush/fill/add-replica (or --start/--stop/--kill/--rebalance/--status/--flush/--fill/--add-replica) before ports (got: %s).', $arg));
+                        throw new InvalidArgumentException(sprintf('Specify start/stop/kill/rebalance/status/flush/fill/add-replica/restart-replica (or --start/--stop/--kill/--rebalance/--status/--flush/--fill/--add-replica/--restart-replica) before ports (got: %s).', $arg));
                     }
 
                     $portTokens[] = $arg;
@@ -165,7 +166,7 @@ final class CommandLineParser
         }
 
         if ($action === null) {
-            throw new InvalidArgumentException('Missing action: use start/stop/kill/rebalance/status/flush/fill/add-replica (or --start/--stop/--kill/--rebalance/--status/--flush/--fill/--add-replica).');
+            throw new InvalidArgumentException('Missing action: use start/stop/kill/rebalance/status/flush/fill/add-replica/restart-replica (or --start/--stop/--kill/--rebalance/--status/--flush/--fill/--add-replica/--restart-replica).');
         }
 
         if ($action === 'start' && $replicas < 0) {
@@ -268,6 +269,10 @@ final class CommandLineParser
             throw new InvalidArgumentException('add-replica expects exactly one seed port.');
         }
 
+        if ($action === 'restart-replica' && count($ports) !== 1) {
+            throw new InvalidArgumentException('restart-replica expects exactly one seed port.');
+        }
+
         $fillOptions = null;
         if ($action === 'fill') {
             if ($size === null || trim($size) === '') {
@@ -319,6 +324,7 @@ Usage:
   bin/manage-cluster flush PORT [PORT ...]
   bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]
   bin/manage-cluster add-replica SEED_PORT [--port PORT]
+  bin/manage-cluster restart-replica SEED_PORT
   bin/manage-cluster --start PORT [PORT ...] [--replicas N] [--tls] [--gen-script PATH] [-- REDIS_SERVER_ARG ...]
   bin/manage-cluster --stop PORT [PORT ...]
   bin/manage-cluster --kill PORT
@@ -327,6 +333,7 @@ Usage:
   bin/manage-cluster --flush PORT [PORT ...]
   bin/manage-cluster --fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]
   bin/manage-cluster --add-replica SEED_PORT [--port PORT]
+  bin/manage-cluster --restart-replica SEED_PORT
 
 Options:
   --binary PATH                Path to redis-server (default: redis-server)
@@ -364,7 +371,7 @@ TXT;
 
     private static function isActionToken(string $value): bool
     {
-        return in_array($value, ['start', 'stop', 'kill', 'rebalance', 'status', 'flush', 'fill', 'add-replica'], true);
+        return in_array($value, ['start', 'stop', 'kill', 'rebalance', 'status', 'flush', 'fill', 'add-replica', 'restart-replica'], true);
     }
 
     /**

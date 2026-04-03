@@ -54,7 +54,7 @@ final class ClusterTreeSelector
             throw new RuntimeException(sprintf('No selectable cluster nodes were discovered from seed port %d.', $seedPort));
         }
 
-        $selectedIndex = 0;
+        $selectedIndex = $this->findFirstSelectableIndex($entries);
         $terminal = Terminal::new();
         $display = $this->createDisplay($terminal, $entries);
 
@@ -80,15 +80,19 @@ final class ClusterTreeSelector
                     }
 
                     $selectedIndex = match ($event->code) {
-                        KeyCode::Up => max(0, $selectedIndex - 1),
-                        KeyCode::Down => min(count($entries) - 1, $selectedIndex + 1),
-                        KeyCode::Home => 0,
-                        KeyCode::End => count($entries) - 1,
+                        KeyCode::Up => $this->moveSelection($entries, $selectedIndex, -1),
+                        KeyCode::Down => $this->moveSelection($entries, $selectedIndex, 1),
+                        KeyCode::Home => $this->findFirstSelectableIndex($entries),
+                        KeyCode::End => $this->findLastSelectableIndex($entries),
                         KeyCode::Enter => $selectedIndex,
                         default => $selectedIndex,
                     };
 
                     if ($event->code === KeyCode::Enter) {
+                        if (!$entries[$selectedIndex]->selectable) {
+                            continue;
+                        }
+
                         return $entries[$selectedIndex]->node;
                     }
 
@@ -102,8 +106,8 @@ final class ClusterTreeSelector
                     }
 
                     $selectedIndex = match ($char) {
-                        'k' => max(0, $selectedIndex - 1),
-                        'j' => min(count($entries) - 1, $selectedIndex + 1),
+                        'k' => $this->moveSelection($entries, $selectedIndex, -1),
+                        'j' => $this->moveSelection($entries, $selectedIndex, 1),
                         default => $selectedIndex,
                     };
                 }
@@ -213,5 +217,55 @@ final class ClusterTreeSelector
         }
 
         return $rows;
+    }
+
+    /**
+     * @param list<ClusterTreeViewEntry> $entries
+     */
+    private function findFirstSelectableIndex(array $entries): int
+    {
+        foreach ($entries as $index => $entry) {
+            if ($entry->selectable) {
+                return $index;
+            }
+        }
+
+        throw new RuntimeException('Interactive cluster selector requires at least one selectable entry.');
+    }
+
+    /**
+     * @param list<ClusterTreeViewEntry> $entries
+     */
+    private function findLastSelectableIndex(array $entries): int
+    {
+        for ($index = count($entries) - 1; $index >= 0; $index--) {
+            if ($entries[$index]->selectable) {
+                return $index;
+            }
+        }
+
+        throw new RuntimeException('Interactive cluster selector requires at least one selectable entry.');
+    }
+
+    /**
+     * @param list<ClusterTreeViewEntry> $entries
+     */
+    private function moveSelection(array $entries, int $selectedIndex, int $delta): int
+    {
+        if ($delta === 0) {
+            return $selectedIndex;
+        }
+
+        $candidate = $selectedIndex;
+        while (true) {
+            $candidate += $delta;
+            if ($candidate < 0 || $candidate >= count($entries)) {
+                return $selectedIndex;
+            }
+
+            if ($entries[$candidate]->selectable) {
+                return $candidate;
+            }
+        }
     }
 }

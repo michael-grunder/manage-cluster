@@ -83,6 +83,10 @@ try {
             $manager->addReplica($options);
             break;
 
+        case 'restart-replica':
+            $manager->restartReplica($options);
+            break;
+
         default:
             throw new RuntimeException(sprintf('Unsupported action: %s', $options->action));
     }

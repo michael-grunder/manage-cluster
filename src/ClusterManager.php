@@ -573,6 +573,56 @@ final class ClusterManager
         }
     }
 
+    public function restartReplica(CommandLineOptions $options): void
+    {
+        if (!$this->clusterTreeSelector->supportsInteractiveSelection()) {
+            throw new RuntimeException('restart-replica needs an interactive TTY to choose a failed replica.');
+        }
+
+        $seedPort = $options->ports[0];
+        $metadata = $this->stateStore->findClusterByPort($seedPort);
+        if (!is_array($metadata)) {
+            throw new RuntimeException(sprintf(
+                'restart-replica requires managed cluster metadata for seed port %d so the replica config can be reused.',
+                $seedPort,
+            ));
+        }
+
+        [$tls, $caCert, , $rawShards] = $this->resolveSeedConnectionContext($seedPort, $metadata);
+        $shards = $this->clusterShardsParser->parse($rawShards);
+
+        $selectedReplica = $this->clusterTreeSelector->select(
+            shards: $shards,
+            seedPort: $seedPort,
+            mode: ClusterTreeViewMode::FailedReplicasOnly,
+            title: 'Select a failed replica to restart',
+        );
+
+        if (!$selectedReplica instanceof ClusterNodeStatus) {
+            throw new RuntimeException('Replica restart cancelled.');
+        }
+
+        if ($selectedReplica->role !== 'replica') {
+            throw new RuntimeException(sprintf('Selected node %s is not a replica.', $selectedReplica->address()));
+        }
+
+        if ($selectedReplica->health !== 'fail') {
+            throw new RuntimeException(sprintf('Selected replica %s is not in fail state.', $selectedReplica->address()));
+        }
+
+        $configPath = $this->resolveExistingNodeConfigPath($metadata, $selectedReplica->port);
+        $redisBinary = $this->resolveRedisBinaryForRestart($metadata, $options);
+
+        $this->output->step(sprintf('Restarting failed replica %s', $selectedReplica->address()));
+        $this->runProcess([$redisBinary, $configPath]);
+        $this->redisNodeClient->waitForReady($selectedReplica->port, $tls, $caCert);
+        $this->output->success(sprintf(
+            'Replica %s restarted using %s',
+            $selectedReplica->address(),
+            basename($configPath),
+        ));
+    }
+
     /**
      * @param array{ca_cert: string, server_cert: string, server_key: string}|null $tlsMaterial
      */
@@ -769,6 +819,39 @@ final class ClusterManager
         }
 
         return $this->stateStore->createClusterDirectory();
+    }
+
+    /**
+     * @param array<string, mixed> $metadata
+     */
+    private function resolveExistingNodeConfigPath(array $metadata, int $port): string
+    {
+        $clusterDir = $metadata['cluster_dir'] ?? null;
+        if (!is_string($clusterDir) || $clusterDir === '') {
+            throw new RuntimeException(sprintf('Cluster metadata is missing cluster_dir for replica %d.', $port));
+        }
+
+        $configPath = sprintf('%s/node-%d/redis.conf', rtrim($clusterDir, '/'), $port);
+        if (!is_file($configPath)) {
+            throw new RuntimeException(sprintf('Replica config not found for port %d: %s', $port, $configPath));
+        }
+
+        return $configPath;
+    }
+
+    /**
+     * @param array<string, mixed> $metadata
+     */
+    private function resolveRedisBinaryForRestart(array $metadata, CommandLineOptions $options): string
+    {
+        $binary = $metadata['redis_binary'] ?? null;
+        if (!is_string($binary) || $binary === '') {
+            $binary = $options->redisBinary;
+        }
+
+        $this->systemInspector->ensureExecutableExists($binary, 'redis-server');
+
+        return $binary;
     }
 
     private function readConfigDirWithFallback(int $port, bool $tls, ?string $caCert): string

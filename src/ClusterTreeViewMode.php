@@ -8,4 +8,5 @@ enum ClusterTreeViewMode
 {
     case AllNodes;
     case PrimariesOnly;
+    case FailedReplicasOnly;
 }

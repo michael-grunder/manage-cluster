@@ -15,6 +15,35 @@ final class ClusterTreeViewBuilder
         $entries = [];
 
         foreach ($shards as $shard) {
+            if ($mode === ClusterTreeViewMode::FailedReplicasOnly) {
+                $failedReplicas = array_values(array_filter(
+                    $shard->replicas,
+                    static fn (ClusterNodeStatus $replica): bool => $replica->health === 'fail',
+                ));
+
+                if ($failedReplicas === []) {
+                    continue;
+                }
+
+                $entries[] = new ClusterTreeViewEntry(
+                    node: $shard->master,
+                    slotRange: $shard->slotRange(),
+                    depth: 0,
+                    selectable: false,
+                );
+
+                foreach ($failedReplicas as $replica) {
+                    $entries[] = new ClusterTreeViewEntry(
+                        node: $replica,
+                        slotRange: null,
+                        depth: 1,
+                        selectable: true,
+                    );
+                }
+
+                continue;
+            }
+
             $entries[] = new ClusterTreeViewEntry(
                 node: $shard->master,
                 slotRange: $shard->slotRange(),

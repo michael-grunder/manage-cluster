@@ -18,14 +18,15 @@ final class ClusterTreeViewBuilderTest extends TestCase
 
         $entries = $builder->build($this->sampleShards(), ClusterTreeViewMode::AllNodes);
 
-        self::assertCount(3, $entries);
+        self::assertCount(4, $entries);
         self::assertSame('127.0.0.1:7000', $entries[0]->node->address());
         self::assertSame(0, $entries[0]->depth);
         self::assertSame('0-5460', $entries[0]->slotRange);
         self::assertSame('127.0.0.1:7001', $entries[1]->node->address());
         self::assertSame(1, $entries[1]->depth);
         self::assertNull($entries[1]->slotRange);
-        self::assertSame('127.0.0.1:7002', $entries[2]->node->address());
+        self::assertSame('127.0.0.1:7003', $entries[2]->node->address());
+        self::assertSame('127.0.0.1:7002', $entries[3]->node->address());
     }
 
     public function testBuildOmitsReplicasForPrimariesOnlyMode(): void
@@ -41,6 +42,21 @@ final class ClusterTreeViewBuilderTest extends TestCase
         self::assertSame(0, $entries[1]->depth);
     }
 
+    public function testBuildIncludesOnlyFailedReplicasAndTheirPrimaries(): void
+    {
+        $builder = new ClusterTreeViewBuilder();
+
+        $entries = $builder->build($this->sampleShards(), ClusterTreeViewMode::FailedReplicasOnly);
+
+        self::assertCount(2, $entries);
+        self::assertSame('127.0.0.1:7000', $entries[0]->node->address());
+        self::assertFalse($entries[0]->selectable);
+        self::assertSame(0, $entries[0]->depth);
+        self::assertSame('127.0.0.1:7003', $entries[1]->node->address());
+        self::assertTrue($entries[1]->selectable);
+        self::assertSame(1, $entries[1]->depth);
+    }
+
     /**
      * @return list<ClusterShardStatus>
      */
@@ -53,6 +69,7 @@ final class ClusterTreeViewBuilderTest extends TestCase
                 master: new ClusterNodeStatus('master-7000', '127.0.0.1', 7000, '', 'master', 100, 'online'),
                 replicas: [
                     new ClusterNodeStatus('replica-7001', '127.0.0.1', 7001, '', 'replica', 99, 'online'),
+                    new ClusterNodeStatus('replica-7003', '127.0.0.1', 7003, '', 'replica', 40, 'fail'),
                 ],
             ),
             new ClusterShardStatus(
