@@ -123,6 +123,10 @@ Run it directly:
 ./dist/manage-cluster.phar start 7000 --replicas 1
 ```
 
+GitHub Actions also builds the PHAR automatically. Pushes to `main` publish it
+as a workflow artifact, and version tags such as `v1.2.3` additionally attach
+the archive to the corresponding GitHub release.
+
 ## Notes
 
 - Cluster state and per-node ephemeral configs/logs are kept under `/tmp/manage-cluster` by default.

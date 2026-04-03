@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 ### Added
+- Added GitHub Actions workflows for PHP CI on `8.4` and `8.5`, plus automated PHAR build artifacts and tagged release attachments.
 - Added `phpunit.xml` so `vendor/bin/phpunit` discovers the default test suite and Composer bootstrap without extra CLI arguments.
 - Added `bin/manage-cluster` for starting, stopping, and rebalancing ephemeral Redis Cluster instances.
 - Added cluster state tracking in `/tmp/manage-cluster` (configurable via `--state-dir`) so `--stop` can terminate whole clusters by a seed port.
