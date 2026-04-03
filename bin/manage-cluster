@@ -20,9 +20,20 @@ use Mgrunder\CreateCluster\TlsMaterialGenerator;
 require dirname(__DIR__) . '/vendor/autoload.php';
 
 $parser = new CommandLineParser();
+$interactive = function_exists('stream_isatty') && stream_isatty(STDOUT);
+
+if (count($argv) === 1) {
+    fwrite(STDOUT, CommandLineParser::usage($interactive) . PHP_EOL);
+    exit(0);
+}
+
+if (($argv[1] ?? null) === 'help') {
+    fwrite(STDOUT, CommandLineParser::contextualUsage(CommandLineParser::inferHelpAction($argv), $interactive) . PHP_EOL);
+    exit(0);
+}
 
 if (in_array('--help', $argv, true) || in_array('-h', $argv, true)) {
-    fwrite(STDOUT, CommandLineParser::usage() . PHP_EOL);
+    fwrite(STDOUT, CommandLineParser::contextualUsage(CommandLineParser::inferHelpAction($argv), $interactive) . PHP_EOL);
     exit(0);
 }
 
@@ -31,7 +42,7 @@ try {
 } catch (InvalidArgumentException $e) {
     $action = CommandLineParser::inferRequestedAction($argv);
     fwrite(STDERR, $e->getMessage() . PHP_EOL . PHP_EOL);
-    fwrite(STDERR, CommandLineParser::contextualUsage($action) . PHP_EOL);
+    fwrite(STDERR, CommandLineParser::contextualUsage($action, $interactive) . PHP_EOL);
     exit(1);
 }
 

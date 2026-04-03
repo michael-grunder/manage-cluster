@@ -10,11 +10,23 @@ use PHPUnit\Framework\TestCase;
 
 final class CommandLineParserTest extends TestCase
 {
+    public function testUsageIncludesCommandsSection(): void
+    {
+        $usage = CommandLineParser::usage();
+
+        self::assertStringContainsString('bin/manage-cluster [OPTIONS] <COMMAND> [ARGS]', $usage);
+        self::assertStringContainsString('Commands:', $usage);
+        self::assertStringContainsString('start', $usage);
+        self::assertStringContainsString('help', $usage);
+    }
+
     public function testContextualUsageForFillIncludesExamples(): void
     {
         $usage = CommandLineParser::contextualUsage('fill');
 
         self::assertStringContainsString('bin/manage-cluster fill [PORT] --size SIZE', $usage);
+        self::assertStringContainsString('Options:', $usage);
+        self::assertStringContainsString('--pin-primary PORT', $usage);
         self::assertStringContainsString('bin/manage-cluster fill --size 1g', $usage);
         self::assertStringContainsString('bin/manage-cluster fill 7000 --size 512m --pin-primary 7003', $usage);
     }
@@ -38,6 +50,13 @@ final class CommandLineParserTest extends TestCase
         $action = CommandLineParser::inferRequestedAction(['bin/manage-cluster', '--gen-script', 'fill', 'start', '7000']);
 
         self::assertSame('start', $action);
+    }
+
+    public function testInferHelpActionFindsHelpTarget(): void
+    {
+        $action = CommandLineParser::inferHelpAction(['bin/manage-cluster', 'help', 'status']);
+
+        self::assertSame('status', $action);
     }
 
     public function testParsesFlushActionWithLongFlag(): void

@@ -13,6 +13,145 @@ final class CommandLineParser
      */
     private const array ACTIONS = ['start', 'stop', 'kill', 'rebalance', 'status', 'flush', 'fill', 'add-replica', 'restart-replica'];
 
+    /**
+     * @var array<string, string>
+     */
+    private const array ACTION_SUMMARIES = [
+        'start' => 'Start one local Redis Cluster from the given ports',
+        'stop' => 'Stop every managed node in the cluster(s)',
+        'kill' => 'Interactively stop one primary or replica from a seed node',
+        'rebalance' => 'Rebalance slots across the selected cluster nodes',
+        'status' => 'Show shard and node status for one cluster',
+        'flush' => 'Flush every primary in the selected cluster(s)',
+        'fill' => 'Fill a cluster until its primaries reach a target size',
+        'add-replica' => 'Add a new replica to a selected primary',
+        'restart-replica' => 'Restart one failed replica from cluster metadata',
+    ];
+
+    /**
+     * @var array<string, list<array{0:string,1:string}>>
+     */
+    private const array COMMAND_OPTIONS = [
+        'start' => [
+            ['--replicas N', 'Replicas per primary; one seed port expands automatically'],
+            ['--gen-script PATH', 'Write a startup shell script instead of launching now'],
+            ['--binary PATH', 'Path to redis-server or valkey-server'],
+            ['--cluster-announce-ip IP', 'Advertise a fixed IP for all started nodes'],
+            ['--tls', 'Start TLS-only nodes and generate local certificates'],
+            ['--tls-days N', 'Certificate lifetime in days (default: 3650)'],
+            ['--tls-rsa-bits N', 'RSA key size for generated certificates (default: 2048)'],
+            ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
+            ['-- REDIS_SERVER_ARG ...', 'Pass raw server arguments to every started node'],
+        ],
+        'stop' => [
+            ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
+        ],
+        'kill' => [
+            ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
+        ],
+        'rebalance' => [
+            ['--redis-cli PATH', 'Path to redis-cli (default: redis-cli)'],
+            ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
+        ],
+        'status' => [
+            ['--redis-cli PATH', 'Path to redis-cli (default: redis-cli)'],
+            ['--watch', 'Refresh the view every second'],
+            ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
+        ],
+        'flush' => [
+            ['--redis-cli PATH', 'Path to redis-cli (default: redis-cli)'],
+            ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
+        ],
+        'fill' => [
+            ['--size SIZE', 'Required target size: bytes, k, m, g, or t'],
+            ['--types CSV', 'Limit generated keys to string,set,list,hash,zset'],
+            ['--members N', 'Members per composite key (default: 8 when set explicitly)'],
+            ['--member-size N', 'Bytes per member or string payload (default: 256 when set explicitly)'],
+            ['--keys N', 'Adaptive key-count target when both size knobs are omitted'],
+            ['--pin-primary PORT', 'Restrict generated keys to one primary node'],
+            ['--redis-cli PATH', 'Path to redis-cli (default: redis-cli)'],
+            ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
+        ],
+        'add-replica' => [
+            ['--port PORT', 'Replica port; otherwise the next free port is chosen'],
+            ['--binary PATH', 'Path to redis-server or valkey-server'],
+            ['--redis-cli PATH', 'Path to redis-cli (default: redis-cli)'],
+            ['--cluster-announce-ip IP', 'Advertise a fixed IP for the new replica'],
+            ['--tls', 'Start the replica in TLS mode'],
+            ['--tls-days N', 'Certificate lifetime in days (default: 3650)'],
+            ['--tls-rsa-bits N', 'RSA key size for generated certificates (default: 2048)'],
+            ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
+        ],
+        'restart-replica' => [
+            ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
+        ],
+    ];
+
+    /**
+     * @var array<string, list<string>>
+     */
+    private const array COMMAND_EXAMPLES = [
+        'start' => [
+            'bin/manage-cluster start 7000',
+            'bin/manage-cluster start 7000 --replicas 1',
+            'bin/manage-cluster start 7000-7005 --tls',
+            'bin/manage-cluster start 7000 -- --enable-debug-command local',
+        ],
+        'stop' => [
+            'bin/manage-cluster stop 7000',
+            'bin/manage-cluster stop 7000-7005',
+            'bin/manage-cluster stop {7000..7008}',
+        ],
+        'kill' => [
+            'bin/manage-cluster kill 7000',
+        ],
+        'rebalance' => [
+            'bin/manage-cluster rebalance 7000',
+            'bin/manage-cluster rebalance 7000-7005',
+        ],
+        'status' => [
+            'bin/manage-cluster status 7000',
+            'bin/manage-cluster status 7000 --watch',
+        ],
+        'flush' => [
+            'bin/manage-cluster flush 7000',
+            'bin/manage-cluster flush 7000-7005',
+        ],
+        'fill' => [
+            'bin/manage-cluster fill --size 1g',
+            'bin/manage-cluster fill --size 5g --keys 20000',
+            'bin/manage-cluster fill 7000 --size 256m --types string,set --members 32 --member-size 2048',
+            'bin/manage-cluster fill 7000 --size 512m --pin-primary 7003',
+        ],
+        'add-replica' => [
+            'bin/manage-cluster add-replica 7000',
+            'bin/manage-cluster add-replica 7000 --port 7010',
+        ],
+        'restart-replica' => [
+            'bin/manage-cluster restart-replica 7000',
+        ],
+    ];
+
+    /**
+     * @var array<string, list<string>>
+     */
+    private const array COMMAND_NOTES = [
+        'start' => [
+            'A single seed port expands to contiguous ports based on --replicas.',
+            'With the default replica count (0), one seed port expands to 4 ports.',
+        ],
+        'fill' => [
+            'PORT is optional when exactly one managed cluster exists in the state store.',
+            'When both --members and --member-size are omitted, they are derived from --size.',
+        ],
+        'add-replica' => [
+            'The CLI opens an interactive primary picker before attaching the new replica.',
+        ],
+        'restart-replica' => [
+            'The CLI only offers failed replicas that can be recovered from saved metadata.',
+        ],
+    ];
+
     private const int DEFAULT_FILL_MEMBERS = 8;
     private const int DEFAULT_FILL_MEMBER_SIZE = 256;
     private const int DEFAULT_FILL_TARGET_KEYS = 5000;
@@ -317,147 +456,75 @@ final class CommandLineParser
         );
     }
 
-    public static function usage(): string
+    public static function usage(bool $interactive = false): string
     {
-        return <<<'TXT'
-Usage:
-  bin/manage-cluster start PORT [PORT ...] [--replicas N] [--tls] [--gen-script PATH] [-- REDIS_SERVER_ARG ...]
-  bin/manage-cluster stop PORT [PORT ...]
-  bin/manage-cluster kill PORT
-  bin/manage-cluster rebalance PORT [PORT ...]
-  bin/manage-cluster status PORT [--watch]
-  bin/manage-cluster flush PORT [PORT ...]
-  bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]
-  bin/manage-cluster add-replica SEED_PORT [--port PORT]
-  bin/manage-cluster restart-replica SEED_PORT
-  bin/manage-cluster --start PORT [PORT ...] [--replicas N] [--tls] [--gen-script PATH] [-- REDIS_SERVER_ARG ...]
-  bin/manage-cluster --stop PORT [PORT ...]
-  bin/manage-cluster --kill PORT
-  bin/manage-cluster --rebalance PORT [PORT ...]
-  bin/manage-cluster --status PORT [--watch]
-  bin/manage-cluster --flush PORT [PORT ...]
-  bin/manage-cluster --fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]
-  bin/manage-cluster --add-replica SEED_PORT [--port PORT]
-  bin/manage-cluster --restart-replica SEED_PORT
+        $lines = [
+            self::formatHeading('Usage', $interactive) . ':',
+            '  bin/manage-cluster [OPTIONS] <COMMAND> [ARGS]',
+            '',
+            self::formatHeading('Options', $interactive) . ':',
+        ];
 
-Options:
-  --binary PATH                Path to redis-server (default: redis-server)
-  --redis-cli PATH             Path to redis-cli (default: redis-cli)
-  --replicas N                 Number of replicas per master for start
-  --gen-script PATH            Write a shell script for start instead of launching now
-  --cluster-announce-ip IP     Announce IP for the cluster nodes
-  --tls                        Enable TLS-only redis instances
-  --tls-days N                 TLS certificate validity in days (default: 3650)
-  --tls-rsa-bits N             RSA key size (default: 2048)
-  --state-dir PATH             Cluster metadata root (default: /tmp/manage-cluster)
-  --watch                      Refresh status output every second (status only)
-  --size SIZE                  Fill target memory (bytes, kb, mb, gb, tb)
-  --types CSV                  Fill key types: string,set,list,hash,zset
-  --members N                  Members per container key for fill (adaptive default from --size when both size knobs are omitted, otherwise 8)
-  --member-size N              String size or per-key payload size in bytes (adaptive default from --size when both size knobs are omitted, otherwise 256)
-  --keys N                     Adaptive key-count target for fill sizing (used only when both --members and --member-size are omitted; default: 5000)
-  --pin-primary PORT           Pin generated keys to one primary node
-  --port PORT                  Replica port for add-replica (otherwise auto-selected outside current cluster range)
-  -h, --help                   Show this help text
+        foreach (self::globalOptions() as [$option, $description]) {
+            $lines[] = self::formatAlignedRow($option, $description, $interactive);
+        }
 
-Port tokens can be provided as:
-  7000 7001 7002
-  7000-7008
-  {7000..7008}
+        $lines[] = '';
+        $lines[] = self::formatHeading('Commands', $interactive) . ':';
+        foreach (self::ACTIONS as $action) {
+            $lines[] = self::formatAlignedRow($action, self::ACTION_SUMMARIES[$action], $interactive, 18);
+        }
 
-For start only:
-  A single seed port auto-expands to contiguous ports based on replicas.
-  Default replicas (0) expands to 4 ports.
-  Example: start 7000 --replicas 2 => {7000..7008}
-  Additional redis-server/valkey-server args can be passed after `--`.
-  Example: start 7000 -- --enable-debug-command local
-TXT;
+        $lines[] = self::formatAlignedRow('help', 'Print this message or the help of a given command', $interactive, 18);
+        $lines[] = '';
+        $lines[] = self::formatHeading('Examples', $interactive) . ':';
+        $lines[] = '  bin/manage-cluster start 7000';
+        $lines[] = '  bin/manage-cluster status 7000 --watch';
+        $lines[] = '  bin/manage-cluster fill --size 1g';
+        $lines[] = '  bin/manage-cluster help start';
+        $lines[] = '';
+        $lines[] = 'Run `bin/manage-cluster help <command>` for command-specific help.';
+
+        return implode(PHP_EOL, $lines);
     }
 
-    public static function contextualUsage(?string $action): string
+    public static function contextualUsage(?string $action, bool $interactive = false): string
     {
-        return match ($action) {
-            'start' => <<<'TXT'
-Usage:
-  bin/manage-cluster start PORT [PORT ...] [--replicas N] [--tls] [--gen-script PATH] [-- REDIS_SERVER_ARG ...]
+        if ($action === null || !isset(self::ACTION_SUMMARIES[$action])) {
+            return self::usage($interactive);
+        }
 
-Examples:
-  bin/manage-cluster start 7000
-  bin/manage-cluster start 7000 --replicas 1
-  bin/manage-cluster start 7000-7005 --tls
-  bin/manage-cluster start 7000 -- --enable-debug-command local
-TXT,
-            'stop' => <<<'TXT'
-Usage:
-  bin/manage-cluster stop PORT [PORT ...]
+        $lines = [
+            self::formatHeading('Usage', $interactive) . ':',
+            '  ' . self::commandSynopsis($action),
+            '',
+            self::formatHeading('About', $interactive) . ':',
+            '  ' . self::ACTION_SUMMARIES[$action],
+            '',
+            self::formatHeading('Options', $interactive) . ':',
+        ];
 
-Examples:
-  bin/manage-cluster stop 7000
-  bin/manage-cluster stop 7000-7005
-  bin/manage-cluster stop {7000..7008}
-TXT,
-            'kill' => <<<'TXT'
-Usage:
-  bin/manage-cluster kill PORT
+        foreach (self::COMMAND_OPTIONS[$action] as [$option, $description]) {
+            $lines[] = self::formatAlignedRow($option, $description, $interactive);
+        }
 
-Examples:
-  bin/manage-cluster kill 7000
-TXT,
-            'rebalance' => <<<'TXT'
-Usage:
-  bin/manage-cluster rebalance PORT [PORT ...]
+        $lines[] = self::formatAlignedRow('-h, --help', 'Print help for this command', $interactive);
+        $lines[] = '';
+        $lines[] = self::formatHeading('Examples', $interactive) . ':';
+        foreach (self::COMMAND_EXAMPLES[$action] as $example) {
+            $lines[] = '  ' . $example;
+        }
 
-Examples:
-  bin/manage-cluster rebalance 7000
-  bin/manage-cluster rebalance 7000-7005
-TXT,
-            'status' => <<<'TXT'
-Usage:
-  bin/manage-cluster status PORT [--watch]
+        $notes = self::COMMAND_NOTES[$action] ?? [];
+        if ($notes !== []) {
+            $lines[] = '';
+            $lines[] = self::formatHeading('Notes', $interactive) . ':';
+            foreach ($notes as $note) {
+                $lines[] = '  ' . $note;
+            }
+        }
 
-Examples:
-  bin/manage-cluster status 7000
-  bin/manage-cluster status 7000 --watch
-TXT,
-            'flush' => <<<'TXT'
-Usage:
-  bin/manage-cluster flush PORT [PORT ...]
-
-Examples:
-  bin/manage-cluster flush 7000
-  bin/manage-cluster flush 7000-7005
-TXT,
-            'fill' => <<<'TXT'
-Usage:
-  bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]
-
-Examples:
-  bin/manage-cluster fill --size 1g
-  bin/manage-cluster fill --size 5g --keys 20000
-  bin/manage-cluster fill 7000 --size 256m --types string,set --members 32 --member-size 2048
-  bin/manage-cluster fill 7000 --size 512m --pin-primary 7003
-
-Notes:
-  PORT is optional when exactly one managed cluster exists in the state store.
-  SIZE accepts raw bytes or k|m|g|t suffixes such as 512m, 1g, or 1048576.
-TXT,
-            'add-replica' => <<<'TXT'
-Usage:
-  bin/manage-cluster add-replica SEED_PORT [--port PORT]
-
-Examples:
-  bin/manage-cluster add-replica 7000
-  bin/manage-cluster add-replica 7000 --port 7010
-TXT,
-            'restart-replica' => <<<'TXT'
-Usage:
-  bin/manage-cluster restart-replica SEED_PORT
-
-Examples:
-  bin/manage-cluster restart-replica 7000
-TXT,
-            default => self::usage(),
-        };
+        return implode(PHP_EOL, $lines);
     }
 
     /**
@@ -489,6 +556,11 @@ TXT,
                 break;
             }
 
+            if ($arg === 'help') {
+                $candidate = $argv[$i + 1] ?? null;
+                return is_string($candidate) && self::isActionToken($candidate) ? $candidate : null;
+            }
+
             if (isset($optionsWithValues[$arg])) {
                 $i++;
                 continue;
@@ -511,6 +583,23 @@ TXT,
         return null;
     }
 
+    /**
+     * @param list<string> $argv
+     */
+    public static function inferHelpAction(array $argv): ?string
+    {
+        if (count($argv) < 2) {
+            return null;
+        }
+
+        if ($argv[1] === 'help') {
+            $candidate = $argv[2] ?? null;
+            return is_string($candidate) && self::isActionToken($candidate) ? $candidate : null;
+        }
+
+        return self::inferRequestedAction($argv);
+    }
+
     private static function isActionToken(string $value): bool
     {
         return in_array($value, self::ACTIONS, true);
@@ -521,39 +610,86 @@ TXT,
      */
     private function deriveAdaptiveFillShape(int $sizeBytes, int $targetKeys): array
     {
-        $targetBytesPerKey = max(1, (int) ceil($sizeBytes / $targetKeys));
-        $members = max(
+        $targetKeys = max(1, $targetKeys);
+        $bytesPerKey = max(1, (int) ceil($sizeBytes / $targetKeys));
+        $members = (int) max(
             1,
-            min(
-                self::DEFAULT_FILL_MAX_MEMBERS,
-                (int) ceil($targetBytesPerKey / self::DEFAULT_FILL_TARGET_MEMBER_BYTES),
-            ),
+            min(self::DEFAULT_FILL_MAX_MEMBERS, (int) ceil($bytesPerKey / self::DEFAULT_FILL_TARGET_MEMBER_BYTES)),
+        );
+        $memberSize = (int) max(
+            1,
+            $bytesPerKey,
         );
 
-        return [$members, max(8, $targetBytesPerKey)];
+        return [$members, $memberSize];
+    }
+
+    private function parseSizeBytes(string $value): int
+    {
+        $normalized = strtolower(trim($value));
+        if ($normalized === '') {
+            throw new InvalidArgumentException('--size must not be empty.');
+        }
+
+        if (!preg_match('/^(?<amount>\d+)(?<unit>[kmgt]?b?)?$/', $normalized, $matches)) {
+            throw new InvalidArgumentException(sprintf('Invalid --size value: %s', $value));
+        }
+
+        $amount = (int) $matches['amount'];
+        $unit = $matches['unit'] ?? '';
+
+        $multiplier = match ($unit) {
+            '', 'b' => 1,
+            'k', 'kb' => 1024,
+            'm', 'mb' => 1024 ** 2,
+            'g', 'gb' => 1024 ** 3,
+            't', 'tb' => 1024 ** 4,
+            default => throw new InvalidArgumentException(sprintf('Invalid --size unit: %s', $value)),
+        };
+
+        return $amount * $multiplier;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function parseTypes(string $value): array
+    {
+        $types = array_values(array_filter(array_map('trim', explode(',', strtolower($value))), static fn (string $type): bool => $type !== ''));
+        if ($types === []) {
+            throw new InvalidArgumentException('--types must contain at least one key type.');
+        }
+
+        $allowed = ['string', 'set', 'list', 'hash', 'zset'];
+        foreach ($types as $type) {
+            if (!in_array($type, $allowed, true)) {
+                throw new InvalidArgumentException(sprintf('Unsupported fill type: %s', $type));
+            }
+        }
+
+        return $types;
     }
 
     /**
      * @return list<int>
      */
-    private function expandSingleStartPort(int $seedPort, int $replicas): array
+    private function expandSingleStartPort(int $startPort, int $replicas): array
     {
-        $requiredNodeCount = $replicas === 0
-            ? 4
-            : (3 * ($replicas + 1));
-        $endPort = $seedPort + $requiredNodeCount - 1;
-
+        $nodeCount = $replicas === 0 ? 4 : 3 * ($replicas + 1);
+        $endPort = $startPort + $nodeCount - 1;
         if ($endPort > 65535) {
             throw new InvalidArgumentException(sprintf(
                 'Seed port %d with --replicas %d exceeds max port when expanded (%d).',
-                $seedPort,
+                $startPort,
                 $replicas,
                 $endPort,
             ));
         }
 
-        /** @var list<int> $ports */
-        $ports = range($seedPort, $endPort);
+        $ports = [];
+        for ($port = $startPort; $port < $startPort + $nodeCount; $port++) {
+            $ports[] = $port;
+        }
 
         return $ports;
     }
@@ -564,8 +700,8 @@ TXT,
     private function parseIntOption(array $argv, int $index, string $option): int
     {
         $value = $this->parseStringOption($argv, $index, $option);
-        if (preg_match('/^-?\d+$/', $value) !== 1) {
-            throw new InvalidArgumentException(sprintf('%s expects an integer value.', $option));
+        if (!preg_match('/^-?\d+$/', $value)) {
+            throw new InvalidArgumentException(sprintf('%s expects an integer, got: %s', $option, $value));
         }
 
         return (int) $value;
@@ -584,60 +720,45 @@ TXT,
     }
 
     /**
-     * @return list<string>
+     * @return list<array{0:string,1:string}>
      */
-    private function parseTypes(string $csv): array
+    private static function globalOptions(): array
     {
-        $tokens = array_map('trim', explode(',', strtolower($csv)));
-        $tokens = array_values(array_filter($tokens, static fn (string $token): bool => $token !== ''));
-        if ($tokens === []) {
-            throw new InvalidArgumentException('--types expects a non-empty CSV list.');
-        }
-
-        $allowed = ['string' => true, 'set' => true, 'list' => true, 'hash' => true, 'zset' => true];
-        $types = [];
-        foreach ($tokens as $token) {
-            if (!isset($allowed[$token])) {
-                throw new InvalidArgumentException(sprintf('Unsupported fill type: %s', $token));
-            }
-
-            $types[$token] = true;
-        }
-
-        /** @var list<string> $normalized */
-        $normalized = array_keys($types);
-
-        return $normalized;
+        return [
+            ['-h, --help', 'Print help'],
+            ['--binary PATH', 'Path to redis-server or valkey-server'],
+            ['--redis-cli PATH', 'Path to redis-cli (default: redis-cli)'],
+            ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
+        ];
     }
 
-    private function parseSizeBytes(string $raw): int
+    private static function commandSynopsis(string $action): string
     {
-        $value = strtolower(trim($raw));
-        if ($value === '') {
-            throw new InvalidArgumentException('--size expects a value.');
-        }
-
-        if (preg_match('/^(\d+)([kmgt]?)(b)?$/', $value, $matches) !== 1) {
-            throw new InvalidArgumentException('--size expects formats like 100m, 1g, 512k, or 1048576.');
-        }
-
-        $base = (int) $matches[1];
-        $unit = $matches[2];
-
-        $multiplier = match ($unit) {
-            '' => 1,
-            'k' => 1024,
-            'm' => 1024 ** 2,
-            'g' => 1024 ** 3,
-            't' => 1024 ** 4,
-            default => throw new InvalidArgumentException(sprintf('Unsupported --size unit: %s', $unit)),
+        return match ($action) {
+            'start' => 'bin/manage-cluster start PORT [PORT ...] [--replicas N] [--tls] [--gen-script PATH] [-- REDIS_SERVER_ARG ...]',
+            'stop' => 'bin/manage-cluster stop PORT [PORT ...]',
+            'kill' => 'bin/manage-cluster kill PORT',
+            'rebalance' => 'bin/manage-cluster rebalance PORT [PORT ...]',
+            'status' => 'bin/manage-cluster status PORT [--watch]',
+            'flush' => 'bin/manage-cluster flush PORT [PORT ...]',
+            'fill' => 'bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]',
+            'add-replica' => 'bin/manage-cluster add-replica SEED_PORT [--port PORT]',
+            'restart-replica' => 'bin/manage-cluster restart-replica SEED_PORT',
+            default => 'bin/manage-cluster [OPTIONS] <COMMAND> [ARGS]',
         };
+    }
 
-        $bytes = $base * $multiplier;
-        if ($bytes <= 0) {
-            throw new InvalidArgumentException('--size must be > 0.');
-        }
+    private static function formatHeading(string $text, bool $interactive): string
+    {
+        return $interactive ? sprintf("\033[1m%s\033[0m", $text) : $text;
+    }
 
-        return $bytes;
+    private static function formatAlignedRow(string $left, string $right, bool $interactive, int $width = 24): string
+    {
+        $plainLeft = $left;
+        $formattedLeft = $interactive ? sprintf("\033[36m%s\033[0m", $left) : $left;
+        $padding = max(2, $width - strlen($plainLeft));
+
+        return sprintf('  %s%s%s', $formattedLeft, str_repeat(' ', $padding), $right);
     }
 }
