@@ -104,6 +104,10 @@ Build an executable PHAR archive:
 bin/build-phar-shim
 ```
 
+By default the builder now packages only runtime dependencies and applies the
+best available PHAR file compression automatically (`bz2`, then `gz`, else
+uncompressed).
+
 Or via make:
 
 ```bash
@@ -127,6 +131,14 @@ builder directly:
 
 ```bash
 /path/to/php -d phar.readonly=0 bin/build-phar --output dist/custom-name.phar
+```
+
+Choose compression explicitly when needed:
+
+```bash
+/path/to/php -d phar.readonly=0 bin/build-phar --compression none
+/path/to/php -d phar.readonly=0 bin/build-phar --compression gz
+/path/to/php -d phar.readonly=0 bin/build-phar --compression bz2
 ```
 
 Run it directly:
@@ -170,3 +182,5 @@ the archive to the corresponding GitHub release.
 - `fill` prints periodic progress (memory vs target, keys added, elapsed time); when stdout is a TTY it updates one line in place, otherwise it emits log-style lines.
 - `--pin-primary PORT` pins generated keys to one primary by finding a matching Redis Cluster hash tag and prefixing key names with that tag.
 - PHAR builds require the `phar` extension and `phar.readonly=0` at build time.
+- Compressed PHARs require the matching runtime extension: `zlib` for `gz`,
+  `bz2` for `bz2`.

@@ -8,6 +8,7 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 $projectRoot = dirname(__DIR__);
 $defaultOutput = sprintf('%s/dist/manage-cluster.phar', $projectRoot);
 $output = $defaultOutput;
+$compression = 'auto';
 
 for ($i = 1; $i < count($argv); $i++) {
     $arg = $argv[$i];
@@ -23,8 +24,23 @@ for ($i = 1; $i < count($argv); $i++) {
         continue;
     }
 
+    if ($arg === '--compression') {
+        $compressionArg = $argv[$i + 1] ?? null;
+        if (!is_string($compressionArg) || $compressionArg === '' || str_starts_with($compressionArg, '--')) {
+            throw new \InvalidArgumentException('--compression expects one of: auto, none, gz, bz2.');
+        }
+
+        $compression = strtolower($compressionArg);
+        if (!in_array($compression, ['auto', 'none', 'gz', 'bz2'], true)) {
+            throw new \InvalidArgumentException(sprintf('Unsupported compression mode: %s', $compressionArg));
+        }
+
+        $i++;
+        continue;
+    }
+
     if ($arg === '--help' || $arg === '-h') {
-        fwrite(STDOUT, "Usage: php bin/build-phar [--output PATH]\n");
+        fwrite(STDOUT, "Usage: php bin/build-phar [--output PATH] [--compression auto|none|gz|bz2]\n");
         exit(0);
     }
 
@@ -62,7 +78,7 @@ $phar->startBuffering();
 logProgress('Adding bin/manage-cluster');
 addFile($phar, $projectRoot, 'bin/manage-cluster');
 addDirectory($phar, $projectRoot, 'src');
-addDirectory($phar, $projectRoot, 'vendor');
+addRuntimeVendor($phar, $projectRoot);
 
 logProgress('Writing PHAR stub');
 $phar->setStub(<<<'PHP'
@@ -72,6 +88,14 @@ Phar::mapPhar('manage-cluster.phar');
 require 'phar://manage-cluster.phar/bin/manage-cluster';
 __HALT_COMPILER();
 PHP);
+
+$resolvedCompression = resolveCompressionMode($compression);
+if ($resolvedCompression !== null) {
+    logProgress(sprintf('Compressing PHAR contents with %s', compressionLabel($resolvedCompression)));
+    $phar->compressFiles($resolvedCompression);
+} else {
+    logProgress('Building uncompressed PHAR contents');
+}
 
 logProgress('Finalizing archive');
 $phar->stopBuffering();
@@ -129,6 +153,57 @@ function addDirectory(\Phar $phar, string $projectRoot, string $relativeDirector
     }
 }
 
+function addRuntimeVendor(\Phar $phar, string $projectRoot): void
+{
+    logProgress('Preparing runtime-only vendor tree');
+
+    $installed = require sprintf('%s/vendor/composer/installed.php', $projectRoot);
+    if (!is_array($installed) || !isset($installed['root'], $installed['versions'])) {
+        throw new \RuntimeException('Unsupported Composer installed.php structure.');
+    }
+
+    $runtimePackages = [];
+    foreach ($installed['versions'] as $packageName => $package) {
+        if ($packageName === ($installed['root']['name'] ?? null)) {
+            continue;
+        }
+
+        if (($package['dev_requirement'] ?? true) === true) {
+            continue;
+        }
+
+        $installPath = $package['install_path'] ?? null;
+        if (!is_string($installPath) || $installPath === '') {
+            throw new \RuntimeException(sprintf('Runtime package %s is missing an install path.', $packageName));
+        }
+
+        $resolvedInstallPath = realpath($installPath);
+        if (!is_string($resolvedInstallPath) || $resolvedInstallPath === '') {
+            throw new \RuntimeException(sprintf('Runtime package %s install path could not be resolved: %s', $packageName, $installPath));
+        }
+
+        $runtimePackages[$packageName] = [
+            ...$package,
+            'install_path' => $resolvedInstallPath,
+        ];
+    }
+
+    logProgress(sprintf('Including %d runtime package(s)', count($runtimePackages)));
+
+    foreach ($runtimePackages as $packageName => $package) {
+        $relativeDirectory = toRelativeProjectPath($projectRoot, $package['install_path']);
+        logProgress(sprintf('Adding runtime package %s from %s', $packageName, $relativeDirectory));
+        addDirectoryFiltered(
+            $phar,
+            $projectRoot,
+            $relativeDirectory,
+            static fn (string $absolutePath, string $relativePath): bool => isRuntimeVendorFile($absolutePath, $relativePath),
+        );
+    }
+
+    addRuntimeComposerFiles($phar, $projectRoot, $installed, $runtimePackages);
+}
+
 /**
  * @param \Phar $phar
  */
@@ -140,6 +215,292 @@ function addFile(\Phar $phar, string $projectRoot, string $relativePath): void
     }
 
     $phar->addFile($absolutePath, $relativePath);
+}
+
+/**
+ * @param \Closure(string, string): bool $shouldInclude
+ */
+function addDirectoryFiltered(\Phar $phar, string $projectRoot, string $relativeDirectory, \Closure $shouldInclude): void
+{
+    $absoluteDirectory = sprintf('%s/%s', $projectRoot, $relativeDirectory);
+    if (!is_dir($absoluteDirectory)) {
+        throw new \RuntimeException(sprintf('Required directory does not exist: %s', $absoluteDirectory));
+    }
+
+    logProgress(sprintf('Scanning %s', $relativeDirectory));
+
+    $iterator = new \RecursiveIteratorIterator(
+        new \RecursiveDirectoryIterator($absoluteDirectory, \RecursiveDirectoryIterator::SKIP_DOTS),
+    );
+
+    $files = [];
+    $scannedFiles = 0;
+    foreach ($iterator as $fileInfo) {
+        if (!$fileInfo->isFile()) {
+            continue;
+        }
+
+        $absolutePath = (string) $fileInfo->getPathname();
+        $relativePath = ltrim(substr($absolutePath, strlen($projectRoot)), '/');
+        $scannedFiles++;
+
+        if ($shouldInclude($absolutePath, $relativePath)) {
+            $files[$relativePath] = $absolutePath;
+        }
+
+        if ($scannedFiles === 1 || $scannedFiles % 250 === 0) {
+            logProgress(sprintf('Scanned %s: %d file(s)', $relativeDirectory, $scannedFiles));
+        }
+    }
+
+    logProgress(sprintf('Adding %d filtered file(s) from %s', count($files), $relativeDirectory));
+
+    ksort($files, SORT_STRING);
+    $addedFiles = 0;
+    foreach ($files as $relativePath => $absolutePath) {
+        $phar->addFile($absolutePath, $relativePath);
+        $addedFiles++;
+
+        if ($addedFiles === 1 || $addedFiles % 250 === 0 || $addedFiles === count($files)) {
+            logProgress(sprintf('Added %s: %d/%d file(s)', $relativeDirectory, $addedFiles, count($files)));
+        }
+    }
+}
+
+/**
+ * @param array<string, mixed> $installed
+ * @param array<string, array<string, mixed>> $runtimePackages
+ */
+function addRuntimeComposerFiles(\Phar $phar, string $projectRoot, array $installed, array $runtimePackages): void
+{
+    $allowedPackagePrefixes = array_fill_keys(
+        array_map(
+            static fn (array $package): string => sprintf('%s/', trim(toRelativeProjectPath($projectRoot, $package['install_path']), '/')),
+            $runtimePackages,
+        ),
+        true,
+    );
+
+    $allowedPackagePrefixes['src/'] = true;
+    $allowedPackagePrefixes['vendor/composer/'] = true;
+
+    $autoloadFiles = filterAutoloadPaths(
+        require sprintf('%s/vendor/composer/autoload_files.php', $projectRoot),
+        $allowedPackagePrefixes,
+        $projectRoot,
+    );
+    $autoloadPsr4 = filterAutoloadPathLists(
+        require sprintf('%s/vendor/composer/autoload_psr4.php', $projectRoot),
+        $allowedPackagePrefixes,
+        $projectRoot,
+    );
+    $autoloadClassmap = filterAutoloadPaths(
+        require sprintf('%s/vendor/composer/autoload_classmap.php', $projectRoot),
+        $allowedPackagePrefixes,
+        $projectRoot,
+    );
+
+    $runtimeInstalled = [
+        'root' => [
+            ...$installed['root'],
+            'dev' => false,
+        ],
+        'versions' => [
+            $installed['root']['name'] => [
+                ...$installed['versions'][$installed['root']['name']],
+                'dev_requirement' => false,
+            ],
+            ...$runtimePackages,
+        ],
+    ];
+
+    $phar->addFromString('vendor/autoload.php', buildRuntimeAutoloadPhp());
+    $phar->addFromString('vendor/composer/autoload_files.php', exportPhpArrayFile('autoload_files.php', $autoloadFiles));
+    $phar->addFromString('vendor/composer/autoload_psr4.php', exportPhpArrayFile('autoload_psr4.php', $autoloadPsr4));
+    $phar->addFromString('vendor/composer/autoload_classmap.php', exportPhpArrayFile('autoload_classmap.php', $autoloadClassmap));
+    $phar->addFromString('vendor/composer/autoload_namespaces.php', exportPhpArrayFile('autoload_namespaces.php', []));
+    $phar->addFromString('vendor/composer/installed.php', "<?php return " . var_export($runtimeInstalled, true) . ";\n");
+    $installedJson = json_encode(
+        ['root' => $runtimeInstalled['root'], 'versions' => $runtimeInstalled['versions']],
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR,
+    );
+    $phar->addFromString('vendor/composer/installed.json', $installedJson . "\n");
+
+    foreach ([
+        'vendor/composer/ClassLoader.php',
+        'vendor/composer/InstalledVersions.php',
+        'vendor/composer/platform_check.php',
+    ] as $relativePath) {
+        addFile($phar, $projectRoot, $relativePath);
+    }
+}
+
+/**
+ * @param array<string, string> $autoloadPaths
+ * @param array<string, bool> $allowedPrefixes
+ * @return array<string, string>
+ */
+function filterAutoloadPaths(array $autoloadPaths, array $allowedPrefixes, string $projectRoot): array
+{
+    $filtered = [];
+    foreach ($autoloadPaths as $key => $path) {
+        $relativePath = toRelativeProjectPathIfInProject($projectRoot, $path);
+        if ($relativePath !== null && pathMatchesAllowedPrefixes($relativePath, $allowedPrefixes)) {
+            $filtered[$key] = $relativePath;
+        }
+    }
+
+    return $filtered;
+}
+
+/**
+ * @param array<string, list<string>> $autoloadPathLists
+ * @param array<string, bool> $allowedPrefixes
+ * @return array<string, list<string>>
+ */
+function filterAutoloadPathLists(array $autoloadPathLists, array $allowedPrefixes, string $projectRoot): array
+{
+    $filtered = [];
+    foreach ($autoloadPathLists as $prefix => $paths) {
+        $matchingPaths = array_values(array_filter(
+            $paths,
+            static function (string $path) use ($allowedPrefixes, $projectRoot): bool {
+                $relativePath = toRelativeProjectPathIfInProject($projectRoot, $path);
+
+                return $relativePath !== null && pathMatchesAllowedPrefixes($relativePath, $allowedPrefixes);
+            },
+        ));
+
+        if ($matchingPaths !== []) {
+            $filtered[$prefix] = array_values(array_map(
+                static fn (string $path): string => toRelativeProjectPath($projectRoot, $path),
+                $matchingPaths,
+            ));
+        }
+    }
+
+    return $filtered;
+}
+
+/**
+ * @param array<string, bool> $allowedPrefixes
+ */
+function pathMatchesAllowedPrefixes(string $path, array $allowedPrefixes): bool
+{
+    $normalizedPath = trim(str_replace('\\', '/', $path), '/');
+
+    foreach (array_keys($allowedPrefixes) as $allowedPrefix) {
+        $normalizedPrefix = trim($allowedPrefix, '/');
+        if ($normalizedPath === $normalizedPrefix || str_starts_with($normalizedPath, $normalizedPrefix . '/')) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function toRelativeProjectPathIfInProject(string $projectRoot, string $absolutePath): ?string
+{
+    $resolvedPath = realpath($absolutePath);
+    if (!is_string($resolvedPath) || !str_starts_with($resolvedPath, $projectRoot . '/')) {
+        return null;
+    }
+
+    return toRelativeProjectPath($projectRoot, $resolvedPath);
+}
+
+function toRelativeProjectPath(string $projectRoot, string $absolutePath): string
+{
+    $relativePath = ltrim(substr($absolutePath, strlen($projectRoot)), '/');
+    if ($relativePath === '') {
+        throw new \RuntimeException(sprintf('Path is not inside the project root: %s', $absolutePath));
+    }
+
+    return $relativePath;
+}
+
+function isRuntimeVendorFile(string $absolutePath, string $relativePath): bool
+{
+    if (str_ends_with($relativePath, '.php') || str_ends_with($relativePath, '.bdf')) {
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * @param array<mixed> $data
+ */
+function exportPhpArrayFile(string $commentName, array $data): string
+{
+    return sprintf(
+        "<?php\n\n// %s @generated for PHAR runtime\n\nreturn %s;\n",
+        $commentName,
+        var_export($data, true),
+    );
+}
+
+function buildRuntimeAutoloadPhp(): string
+{
+return <<<'PHP'
+<?php
+
+require_once __DIR__ . '/composer/ClassLoader.php';
+require_once __DIR__ . '/composer/platform_check.php';
+
+$loader = new \Composer\Autoload\ClassLoader(__DIR__);
+$resolvePath = static function (string $path): string {
+    if (str_starts_with($path, 'vendor/')) {
+        return __DIR__ . '/' . substr($path, strlen('vendor/'));
+    }
+
+    return dirname(__DIR__) . '/' . $path;
+};
+
+foreach (require __DIR__ . '/composer/autoload_psr4.php' as $prefix => $paths) {
+    $loader->setPsr4($prefix, array_map($resolvePath, $paths));
+}
+
+$classMap = require __DIR__ . '/composer/autoload_classmap.php';
+if ($classMap !== []) {
+    $loader->addClassMap(array_map($resolvePath, $classMap));
+}
+
+$loader->register(true);
+
+$autoloadFiles = require __DIR__ . '/composer/autoload_files.php';
+foreach ($autoloadFiles as $fileIdentifier => $file) {
+    if (!isset($GLOBALS['__composer_autoload_files'][$fileIdentifier])) {
+        $GLOBALS['__composer_autoload_files'][$fileIdentifier] = true;
+        require $resolvePath($file);
+    }
+}
+
+return $loader;
+PHP;
+}
+
+function resolveCompressionMode(string $compression): ?int
+{
+    return match ($compression) {
+        'auto' => extension_loaded('bz2') ? \Phar::BZ2 : (extension_loaded('zlib') ? \Phar::GZ : null),
+        'none' => null,
+        'gz' => extension_loaded('zlib')
+            ? \Phar::GZ
+            : throw new \RuntimeException('gzip compression requires the zlib extension.'),
+        'bz2' => extension_loaded('bz2')
+            ? \Phar::BZ2
+            : throw new \RuntimeException('bzip2 compression requires the bz2 extension.'),
+    };
+}
+
+function compressionLabel(int $compression): string
+{
+    return match ($compression) {
+        \Phar::GZ => 'gzip',
+        \Phar::BZ2 => 'bzip2',
+        default => sprintf('unknown(%d)', $compression),
+    };
 }
 
 function logProgress(string $message): void
