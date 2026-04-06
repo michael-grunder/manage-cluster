@@ -281,7 +281,11 @@ final class ClusterManager
 
         while (true) {
             $rawShards = $this->readClusterShardsWithFallback($seedPort, $tls, $caCert);
-            $shards = $this->clusterShardsParser->parse($rawShards);
+            $shards = $this->enrichShardsWithUsedMemory(
+                $this->clusterShardsParser->parse($rawShards),
+                $tls,
+                $caCert,
+            );
 
             $renderedWithTui = $this->clusterStatusTuiRenderer->render(
                 shards: $shards,
@@ -308,6 +312,41 @@ final class ClusterManager
 
             usleep(1_000_000);
         }
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     * @return list<ClusterShardStatus>
+     */
+    private function enrichShardsWithUsedMemory(array $shards, bool $tls, ?string $caCert): array
+    {
+        $usedMemoryByPort = [];
+
+        foreach ($shards as $shard) {
+            $nodes = [$shard->master, ...$shard->replicas];
+            foreach ($nodes as $node) {
+                $usedMemoryByPort[$node->port] ??= $this->redisNodeClient->tryFetchUsedMemoryBytes(
+                    $node->port,
+                    $tls,
+                    $caCert,
+                );
+            }
+        }
+
+        return array_map(
+            static fn (ClusterShardStatus $shard): ClusterShardStatus => new ClusterShardStatus(
+                slotStart: $shard->slotStart,
+                slotEnd: $shard->slotEnd,
+                master: $shard->master->withUsedMemoryBytes($usedMemoryByPort[$shard->master->port] ?? null),
+                replicas: array_map(
+                    static fn (ClusterNodeStatus $replica): ClusterNodeStatus => $replica->withUsedMemoryBytes(
+                        $usedMemoryByPort[$replica->port] ?? null,
+                    ),
+                    $shard->replicas,
+                ),
+            ),
+            $shards,
+        );
     }
 
     public function flush(CommandLineOptions $options): void

@@ -43,12 +43,13 @@ final class ClusterStatusRenderer
             $slots = $slotRange !== null ? sprintf('[%s]', $slotRange) : '-';
 
             return sprintf(
-                '%s%-21s %-8s %-14s %-9d %s',
+                '%s%-21s %-8s %-14s %-9d %-10s %s',
                 $prefix,
                 $this->trim($address, 21),
                 $node->shortId(8),
                 $slots,
                 $node->replicationOffset,
+                MemoryUsageFormatter::format($node->usedMemoryBytes),
                 $node->health,
             );
         }
@@ -57,11 +58,12 @@ final class ClusterStatusRenderer
             $slots = $slotRange !== null ? sprintf('[%s]', $slotRange) : '-';
 
             return sprintf(
-                '%s%-21s %-8s %-14s %s',
+                '%s%-21s %-8s %-14s %-10s %s',
                 $prefix,
                 $this->trim($address, 21),
                 $node->shortId(8),
                 $slots,
+                MemoryUsageFormatter::format($node->usedMemoryBytes),
                 $node->health,
             );
         }

@@ -237,6 +237,34 @@ final class RedisNodeClient
         return $raw;
     }
 
+    public function tryFetchUsedMemoryBytes(int $port, bool $tls, ?string $caCert): ?int
+    {
+        try {
+            $redis = $this->connectToNode($port, $tls, $caCert);
+        } catch (RedisException|RuntimeException) {
+            return null;
+        }
+
+        try {
+            $info = $redis->info('memory');
+        } catch (RedisException) {
+            return null;
+        } finally {
+            $redis->close();
+        }
+
+        if (!is_array($info)) {
+            return null;
+        }
+
+        $used = $info['used_memory'] ?? null;
+        if (!is_int($used) && !is_string($used)) {
+            return null;
+        }
+
+        return (int) $used;
+    }
+
     public function connectToNode(int $port, bool $tls, ?string $caCert): Redis
     {
         $redis = new Redis();

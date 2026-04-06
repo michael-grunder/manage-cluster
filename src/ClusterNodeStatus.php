@@ -14,6 +14,7 @@ final readonly class ClusterNodeStatus
         public string $role,
         public int $replicationOffset,
         public string $health,
+        public ?int $usedMemoryBytes = null,
     ) {
     }
 
@@ -27,5 +28,19 @@ final readonly class ClusterNodeStatus
         $host = $this->endpoint !== '' ? $this->endpoint : $this->ip;
 
         return sprintf('%s:%d', $host, $this->port);
+    }
+
+    public function withUsedMemoryBytes(?int $usedMemoryBytes): self
+    {
+        return new self(
+            id: $this->id,
+            ip: $this->ip,
+            port: $this->port,
+            endpoint: $this->endpoint,
+            role: $this->role,
+            replicationOffset: $this->replicationOffset,
+            health: $this->health,
+            usedMemoryBytes: $usedMemoryBytes,
+        );
     }
 }

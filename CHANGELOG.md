@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `start` support for passing arbitrary raw `redis-server`/`valkey-server` arguments after `--`, applying them to each started node.
 
 ### Changed
+- Updated `status`/`--watch` output to drop the redundant `Role` column by default and show per-node used memory, with `-` for unreachable nodes.
 - Reworked `README.md` into a release-ready guide with installation, quick
   start, command reference, state/TLS notes, PHAR build instructions, and
   development checks ahead of the planned `v0.1.0` release.

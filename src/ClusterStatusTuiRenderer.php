@@ -20,10 +20,10 @@ final class ClusterStatusTuiRenderer
 {
     private const REPLICA_PREFIX = '↳ ';
     private const NODE_ID_LENGTH = 8;
-    private const ROLE_COLUMN_WIDTH = 9;
     private const ID_COLUMN_WIDTH = self::NODE_ID_LENGTH + 1;
     private const SLOTS_COLUMN_WIDTH = 14;
     private const OFFSET_COLUMN_WIDTH = 11;
+    private const MEMORY_COLUMN_WIDTH = 10;
 
     private ?Display $display = null;
     private ?int $viewportHeight = null;
@@ -94,11 +94,11 @@ final class ClusterStatusTuiRenderer
             ->header($this->buildTableHeader())
             ->rows(...$this->buildTableRows($shards))
             ->widths(
-                Constraint::percentage(30),
+                Constraint::percentage(34),
                 Constraint::length(self::ID_COLUMN_WIDTH),
-                Constraint::length(self::ROLE_COLUMN_WIDTH),
                 Constraint::length(self::SLOTS_COLUMN_WIDTH),
                 Constraint::length(self::OFFSET_COLUMN_WIDTH),
+                Constraint::length(self::MEMORY_COLUMN_WIDTH),
                 Constraint::min(8),
             );
 
@@ -118,7 +118,7 @@ final class ClusterStatusTuiRenderer
 
     private function buildTableHeader(): TableRow
     {
-        $header = TableRow::fromStrings('Node', 'ID', 'Role', 'Slots', 'Offset', 'Health');
+        $header = TableRow::fromStrings('Node', 'ID', 'Slots', 'Offset', 'Memory', 'Health');
         $header->style = Style::default()->addModifier(Modifier::BOLD);
 
         return $header;
@@ -136,16 +136,16 @@ final class ClusterStatusTuiRenderer
 
         $rows = [];
         foreach ($shards as $shard) {
-            $rows[] = $this->buildNodeRow($shard->master, 'master', $shard->slotRange(), false);
+            $rows[] = $this->buildNodeRow($shard->master, $shard->slotRange(), false);
             foreach ($shard->replicas as $replica) {
-                $rows[] = $this->buildNodeRow($replica, 'replica', '-', true);
+                $rows[] = $this->buildNodeRow($replica, '-', true);
             }
         }
 
         return $rows;
     }
 
-    private function buildNodeRow(ClusterNodeStatus $node, string $role, string $slots, bool $isReplica): TableRow
+    private function buildNodeRow(ClusterNodeStatus $node, string $slots, bool $isReplica): TableRow
     {
         $address = $isReplica
             ? self::REPLICA_PREFIX . $node->address()
@@ -154,9 +154,9 @@ final class ClusterStatusTuiRenderer
         return TableRow::fromStrings(
             $address,
             $node->shortId(self::NODE_ID_LENGTH),
-            $role,
             $slots,
             (string) $node->replicationOffset,
+            MemoryUsageFormatter::format($node->usedMemoryBytes),
             $node->health,
         );
     }

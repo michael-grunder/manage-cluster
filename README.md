@@ -141,7 +141,8 @@ the CLI falls back to stopping the reachable cluster from that seed.
 
 ### `status`
 
-Reads `CLUSTER SHARDS` and renders shard and node status.
+Reads `CLUSTER SHARDS`, fetches per-node memory usage, and renders shard and
+node status.
 
 ```bash
 bin/manage-cluster status 7000
@@ -152,6 +153,7 @@ Behavior notes:
 
 - Uses a `php-tui` table when stdout is a TTY
 - Falls back to plain text for non-interactive output
+- Shows per-node used memory; unreachable nodes render `-`
 - `--watch` refreshes once per second
 
 ### `rebalance`
