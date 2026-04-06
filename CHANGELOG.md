@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `start` support for passing arbitrary raw `redis-server`/`valkey-server` arguments after `--`, applying them to each started node.
 
 ### Changed
+- Reworked `README.md` into a release-ready guide with installation, quick
+  start, command reference, state/TLS notes, PHAR build instructions, and
+  development checks ahead of the planned `v0.1.0` release.
 - Updated `bin/build-phar` to exclude dev-only Composer packages from PHAR builds, trim vendor payloads to runtime files, and support `--compression auto|none|gz|bz2` with automatic compressed builds by default.
 - Updated README PHAR build documentation with the new compression controls and runtime extension requirements for compressed archives.
 - Updated the default `bin/manage-cluster` help screen to a more concise command-oriented layout with aligned command summaries, examples, and command-specific `help` output.

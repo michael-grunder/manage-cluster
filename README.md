@@ -1,81 +1,179 @@
-# create-cluster
+# manage-cluster
 
-`bin/manage-cluster` starts, stops, kills individual nodes, rebalances, inspects, flushes, fills, adds replicas, and restarts failed replicas in ephemeral local Redis Cluster instances.
+`bin/manage-cluster` is a local Redis Cluster management CLI for ephemeral test
+clusters. It starts and tears down clusters, inspects topology, performs common
+maintenance tasks, and supports a few failure-testing workflows that are useful
+when developing against Redis or Valkey cluster behavior.
+
+The tool is aimed at local development and automated testing, not production
+cluster management.
+
+## Features
+
+- Start a fresh local Redis or Valkey cluster from one or more ports.
+- Auto-expand a single seed port into a valid cluster layout.
+- Persist cluster metadata so later commands can operate from any known member
+  port.
+- Stop whole managed clusters cleanly.
+- Rebalance slots with `redis-cli --cluster rebalance`.
+- Inspect cluster topology with either a TUI table or a plain-text fallback.
+- Watch status continuously.
+- Flush primary nodes across one or more clusters.
+- Fill a cluster with synthetic data until primary memory reaches a target.
+- Interactively kill a selected primary or replica.
+- Interactively add a replica to a selected primary.
+- Interactively restart a failed replica from saved node metadata.
+- Start TLS-only local clusters with ephemeral certificates.
+- Generate a standalone startup shell script instead of starting immediately.
+- Build a single-file PHAR binary for distribution.
 
 ## Requirements
 
 - PHP 8.4+
+- Composer dependencies installed
 - PhpRedis extension
-- `redis-server`
+- `redis-server` or `valkey-server`
 - `redis-cli`
-- `openssl` (only when `--tls` is used)
+- `openssl` when using `--tls`
+- An interactive TTY for `kill`, `add-replica`, `restart-replica`, and the TUI
+  `status` view
 
-## Usage
+## Installation
 
-Start a 9-node cluster with 2 replicas per master:
-
-```bash
-bin/manage-cluster start 7000 --replicas 2
-```
-
-Generate a standalone shell script for starting the requested cluster later:
+Install dependencies:
 
 ```bash
-bin/manage-cluster --gen-script start-cluster.sh start {7000..7002}
-./start-cluster.sh
+composer install
 ```
 
-Start with TLS:
+By default the CLI looks for `redis-server` and `redis-cli` in `PATH`. You can
+override either with `--binary PATH` and `--redis-cli PATH`.
+
+## Quick Start
+
+Start a 3-primary cluster from a single seed port:
 
 ```bash
-bin/manage-cluster start 7000 --replicas 1 --tls
+bin/manage-cluster start 7000
 ```
 
-Start with additional raw `redis-server`/`valkey-server` arguments passed through after `--`:
+Start a 3-primary, 1-replica-per-primary cluster:
 
 ```bash
-bin/manage-cluster start {7000..7002} -- --enable-debug-command local
+bin/manage-cluster start 7000 --replicas 1
 ```
 
-Stop a cluster by any member port (stops masters and replicas):
+Inspect it:
+
+```bash
+bin/manage-cluster status 7000
+```
+
+Stop it:
 
 ```bash
 bin/manage-cluster stop 7000
 ```
 
-Rebalance a running cluster using a seed node:
+## Port Selection
+
+Port arguments accept:
+
+- Individual ports like `7000`
+- Hyphen ranges like `7000-7005`
+- Brace ranges like `{7000..7005}`
+
+For `start`, a single port expands automatically:
+
+- `bin/manage-cluster start 7000` expands to `7000..7003`
+- `bin/manage-cluster start 7000 --replicas 1` expands to 6 ports
+- In general, a single seed port expands to `3 * (replicas + 1)` ports
+
+The final port count must be divisible by `replicas + 1`, and the resulting
+cluster must contain at least 3 primaries.
+
+## Commands
+
+### `start`
+
+Starts one local Redis Cluster and records its metadata in the state store.
+
+```bash
+bin/manage-cluster start 7000
+bin/manage-cluster start 7000 --replicas 2
+bin/manage-cluster start 7000-7005 --binary valkey-server
+bin/manage-cluster start 7000 -- --enable-debug-command local
+```
+
+Useful options:
+
+- `--replicas N` sets replicas per primary
+- `--binary PATH` selects `redis-server` or `valkey-server`
+- `--cluster-announce-ip IP` advertises a fixed address for all started nodes
+- `--tls` enables TLS-only local nodes and generates ephemeral certs
+- `--tls-days N` and `--tls-rsa-bits N` tune generated certificates
+- `--gen-script PATH` writes an executable startup script instead of launching
+- `--state-dir PATH` changes where cluster metadata and per-node files are kept
+- Arguments after `--` are appended to every started server process
+
+Behavior notes:
+
+- The CLI validates executables, requested ports, and cluster shape before
+  launch.
+- Startup prints the resolved server flavor/version, such as
+  `Redis 8.0.0 (e91a340e)`.
+- Managed node files, logs, configs, and metadata live under
+  `/tmp/manage-cluster` by default.
+
+### `stop`
+
+Stops all nodes in the selected managed cluster or clusters.
+
+```bash
+bin/manage-cluster stop 7000
+bin/manage-cluster stop 7000 8000
+bin/manage-cluster stop 7000-7005
+```
+
+When the seed port belongs to a managed cluster, the command stops all cluster
+members and removes its saved metadata. If the port is not in the state store,
+the CLI falls back to stopping the reachable cluster from that seed.
+
+### `status`
+
+Reads `CLUSTER SHARDS` and renders shard and node status.
+
+```bash
+bin/manage-cluster status 7000
+bin/manage-cluster status 7000 --watch
+```
+
+Behavior notes:
+
+- Uses a `php-tui` table when stdout is a TTY
+- Falls back to plain text for non-interactive output
+- `--watch` refreshes once per second
+
+### `rebalance`
+
+Runs `redis-cli --cluster rebalance` against a seed node.
 
 ```bash
 bin/manage-cluster rebalance 7000
 ```
 
-Kill a specific node from an interactive tree rooted at any cluster seed:
+### `flush`
 
-```bash
-bin/manage-cluster kill 7000
-```
-
-Add a replica to an existing cluster by selecting a primary from an interactive primary list (auto-selecting a new port outside current cluster range):
-
-```bash
-bin/manage-cluster add-replica 7000
-bin/manage-cluster add-replica 7000 --port 7010
-```
-
-Restart a failed replica by selecting it from an interactive filtered tree view:
-
-```bash
-bin/manage-cluster restart-replica 7000
-```
-
-Flush DB data on every primary node in one or more clusters:
+Sends `FLUSHDB` to primary nodes only.
 
 ```bash
 bin/manage-cluster flush 7000
 bin/manage-cluster flush 7000 8000
 ```
 
-Fill a cluster with synthetic keys until total primary `used_memory` reaches a target:
+### `fill`
+
+Generates synthetic keys until total primary `used_memory` reaches a target.
 
 ```bash
 bin/manage-cluster fill --size 1g
@@ -84,19 +182,117 @@ bin/manage-cluster fill 7000 --size 256m --types string,set --members 32 --membe
 bin/manage-cluster fill 7000 --size 512m --pin-primary 7003
 ```
 
-Inspect cluster shard/node status from a seed node:
+Useful options:
+
+- `--size SIZE` is required and accepts raw bytes or `k|m|g|t` suffixes
+- `--types CSV` limits key generation to `string,set,list,hash,zset`
+- `--members N` sets entries per composite key
+- `--member-size N` sets bytes per string payload or composite member payload
+- `--keys N` adjusts adaptive sizing when both size knobs are omitted
+- `--pin-primary PORT` restricts generated keys to one primary
+
+Behavior notes:
+
+- If exactly one managed cluster exists, the seed port may be omitted.
+- When both `--members` and `--member-size` are omitted, values are derived from
+  `--size` using a 5,000-key target by default.
+- Progress is shown continuously; TTY output updates one line in place.
+- For container types, each member uses `max(8, ceil(member-size / members))`
+  bytes.
+
+### `kill`
+
+Opens an interactive tree view rooted at any cluster seed and shuts down the
+selected node.
 
 ```bash
-bin/manage-cluster status 7000
+bin/manage-cluster kill 7000
 ```
 
-Watch continuously (refresh every second):
+The picker shows primaries followed by their replicas. Navigation supports
+`↑`/`↓` or `j`/`k`, `Enter` to confirm, and `q` or `Esc` to cancel.
+
+### `add-replica`
+
+Starts a new node and attaches it as a replica of a selected primary.
 
 ```bash
-bin/manage-cluster --status 7000 --watch
+bin/manage-cluster add-replica 7000
+bin/manage-cluster add-replica 7000 --port 7010
 ```
 
-## Build A Single PHAR Binary
+Behavior notes:
+
+- Opens an interactive primary picker
+- If `--port` is omitted, the CLI picks the first free port above the current
+  cluster range
+- Reuses the managed cluster directory when it can resolve one from metadata or
+  node config
+- Supports `--binary`, `--cluster-announce-ip`, `--tls`, `--tls-days`,
+  `--tls-rsa-bits`, and `--state-dir`
+
+### `restart-replica`
+
+Restarts a failed replica using its existing managed node config.
+
+```bash
+bin/manage-cluster restart-replica 7000
+```
+
+Behavior notes:
+
+- Requires an interactive TTY
+- Only failed replica rows are selectable
+- Requires saved managed-cluster metadata in the configured `--state-dir`
+
+### `help`
+
+Show top-level or command-specific help:
+
+```bash
+bin/manage-cluster help
+bin/manage-cluster help start
+bin/manage-cluster help fill
+```
+
+## State Directory
+
+Managed cluster state defaults to `/tmp/manage-cluster`.
+
+Each cluster gets its own directory containing:
+
+- `cluster.json` metadata
+- Per-node directories with `redis.conf`, `redis.log`, `redis.pid`, and
+  `nodes.conf`
+- TLS material when `--tls` is used
+
+The state store is what allows later commands such as `stop`, `fill`, and
+`restart-replica` to work from a seed port instead of requiring full cluster
+topology to be passed every time.
+
+## TLS
+
+`start --tls` and `add-replica --tls` generate ephemeral local CA/server
+material for development and testing. Certificates default to 3650 days and
+2048-bit RSA keys, both configurable with `--tls-days` and `--tls-rsa-bits`.
+
+This mode is for local test clusters, not long-lived PKI management.
+
+## Start Script Generation
+
+Instead of launching immediately, `start` can emit a standalone executable shell
+script:
+
+```bash
+bin/manage-cluster --gen-script start-cluster.sh start {7000..7002}
+./start-cluster.sh
+```
+
+The generated script performs executable and port preflight checks, starts the
+nodes, creates the cluster, emits progress messages, and preserves the cluster
+directory on failure for inspection.
+
+## PHAR Builds
 
 Build an executable PHAR archive:
 
@@ -104,83 +300,60 @@ Build an executable PHAR archive:
 bin/build-phar-shim
 ```
 
-By default the builder now packages only runtime dependencies and applies the
-best available PHAR file compression automatically (`bz2`, then `gz`, else
-uncompressed).
-
-Or via make:
+Equivalent entry points:
 
 ```bash
 make build-phar
-```
-
-Or via composer:
-
-```bash
 composer build-phar
 ```
 
-Or choose a custom output path:
+Custom output path:
 
 ```bash
 make build-phar OUTPUT=dist/custom-name.phar
 ```
 
-If you need more control (for example a specific PHP binary/version), invoke the
-builder directly:
+Direct builder usage:
 
 ```bash
 /path/to/php -d phar.readonly=0 bin/build-phar --output dist/custom-name.phar
 ```
 
-Choose compression explicitly when needed:
+Compression control:
 
 ```bash
+/path/to/php -d phar.readonly=0 bin/build-phar --compression auto
 /path/to/php -d phar.readonly=0 bin/build-phar --compression none
 /path/to/php -d phar.readonly=0 bin/build-phar --compression gz
 /path/to/php -d phar.readonly=0 bin/build-phar --compression bz2
 ```
 
-Run it directly:
+Notes:
+
+- PHAR builds require the `phar` extension and `phar.readonly=0` at build time
+- Automatic compression prefers `bz2`, then `gz`, then uncompressed output
+- Compressed PHARs require the matching runtime extension: `bz2` for bzip2,
+  `zlib` for gzip
+
+Run the built archive directly:
 
 ```bash
 ./dist/manage-cluster.phar start 7000 --replicas 1
 ```
 
-GitHub Actions also builds the PHAR automatically. Pushes to `main` publish it
-as a workflow artifact, and version tags such as `v1.2.3` additionally attach
-the archive to the corresponding GitHub release.
+## Development
 
-## Notes
+Useful checks:
 
-- Cluster state and per-node ephemeral configs/logs are kept under `/tmp/manage-cluster` by default.
-- Use `--state-dir` to change where metadata and temporary cluster directories are created.
-- Start validates that requested ports are not already listening before launching nodes.
-- Start prints the resolved server flavor/version in a concise form such as `Redis 8.0.0 (e91a340e)` or `Valkey 8.1.0 (67c86837)`.
-- For `start`, a single seed port auto-expands to contiguous ports:
-  `7000..7003` for default replicas (`0`), or `3 * (replicas + 1)` ports when replicas are `>= 1`.
-- `start` accepts extra raw server arguments after `--`; they are appended to every `redis-server`/`valkey-server` launch command for that cluster.
-- `start --gen-script PATH` writes an executable shell script instead of starting immediately. The generated script performs preflight checks for the requested executables and ports before launching nodes, emits progress messages while it runs, and preserves the cluster directory on failure for log inspection.
-- TLS mode generates ephemeral CA and server cert/key material for local testing.
-- `status` uses `CLUSTER SHARDS` and renders an interactive terminal table via `php-tui` (with a plain-text fallback when stdout is not a TTY).
-- `--watch` is supported for `status` and refreshes the terminal once per second.
-- `kill` opens an interactive cluster tree view showing primaries followed by their replicas, then sends `SHUTDOWN` to the selected node.
-- `flush` sends `FLUSHDB` to primary nodes only (replicas are not targeted directly).
-- `add-replica` opens an interactive primary-only view, then starts a new Redis node, runs `CLUSTER MEET`, and `CLUSTER REPLICATE` to attach it to the selected primary.
-- `restart-replica` opens an interactive tree view containing only primaries with failed replicas, and only the failed replica rows are selectable for restart.
-- `restart-replica` reuses the managed cluster's existing `redis.conf` and stored `redis-server` binary path for the selected replica, so it requires cluster metadata in the configured state directory.
-- Lifecycle commands such as `start`, `stop`, `kill`, `rebalance`, `flush`, `fill`, `add-replica`, and `restart-replica` emit step-by-step progress; when stdout is a TTY the CLI uses ANSI color, bold labels, and rich symbols, with plain log-style output as a fallback.
-- For `add-replica`, when `--port` is omitted, the tool discovers existing cluster ports and picks the first available listening-free port above the current cluster range.
-- `add-replica` reads `CONFIG GET dir` from the target primary; when the node directory is under `/tmp/manage-cluster`, new node files are created in the same cluster directory.
-- The interactive `kill`, `add-replica`, and `restart-replica` views support `↑`/`↓` or `j`/`k`, `Enter` to confirm, and `q`/`Esc` to cancel.
-- `fill` can run with no explicit seed port when exactly one managed cluster exists in the state store.
-- `fill` supports `--size` units: raw bytes or `k|m|g|t` suffixes (optional trailing `b`), for example `1048576`, `512m`, `1gb`.
-- `fill` defaults to random key generation across `string,set,list,hash,zset`; use `--types` CSV to constrain types.
-- When both `--members` and `--member-size` are omitted, `fill` derives both from `--size` using a 5,000-key target by default.
-- `--keys` overrides that adaptive key-count target (for example `--size 5g --keys 20000` yields smaller per-key payloads than the 5,000-key default); if either `--members` or `--member-size` is provided, those explicit values are used as-is.
-- For container types (`set`, `list`, `hash`, `zset`), each key gets `--members` entries and each entry uses `max(8, ceil(--member-size / --members))` bytes.
-- `fill` prints periodic progress (memory vs target, keys added, elapsed time); when stdout is a TTY it updates one line in place, otherwise it emits log-style lines.
-- `--pin-primary PORT` pins generated keys to one primary by finding a matching Redis Cluster hash tag and prefixing key names with that tag.
-- PHAR builds require the `phar` extension and `phar.readonly=0` at build time.
-- Compressed PHARs require the matching runtime extension: `zlib` for `gz`,
-  `bz2` for `bz2`.
+```bash
+php -l bin/manage-cluster
+php -l src/*.php
+vendor/bin/phpstan analyze
+vendor/bin/phpunit
+```
+
+## Release Notes
+
+The changelog lives in `CHANGELOG.md` and follows Keep a Changelog. The current
+unreleased section already captures the functionality that has accumulated ahead
+of an expected `v0.1.0` tag.
