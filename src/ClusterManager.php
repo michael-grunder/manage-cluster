@@ -398,6 +398,7 @@ final class ClusterManager
             $containerMemberSize = max(8, (int) ceil($fill->memberSize / $fill->members));
             $fillStartAt = microtime(true);
             $lastProgressAt = $fillStartAt;
+            $progressEstimator = new FillProgressEstimator($startUsedBytes, $fill->sizeBytes);
             $renderProgressOnSingleLine = $this->output->isInteractive();
             $clusterLabel = is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort);
             $this->output->step(sprintf('Filling cluster %s', $clusterLabel));
@@ -405,7 +406,7 @@ final class ClusterManager
                 currentUsedBytes: $currentUsedBytes,
                 targetUsedBytes: $fill->sizeBytes,
                 keysAdded: 0,
-                elapsedSeconds: 0,
+                remainingSeconds: null,
                 singleLine: $renderProgressOnSingleLine,
             );
 
@@ -457,7 +458,10 @@ final class ClusterManager
                         currentUsedBytes: $currentUsedBytes,
                         targetUsedBytes: $fill->sizeBytes,
                         keysAdded: $writes,
-                        elapsedSeconds: $now - $fillStartAt,
+                        remainingSeconds: $progressEstimator->estimateRemainingSeconds(
+                            currentUsedBytes: $currentUsedBytes,
+                            elapsedSeconds: $now - $fillStartAt,
+                        ),
                         singleLine: $renderProgressOnSingleLine,
                     );
                 }
@@ -1250,7 +1254,7 @@ final class ClusterManager
         int $currentUsedBytes,
         int $targetUsedBytes,
         int $keysAdded,
-        float $elapsedSeconds,
+        ?int $remainingSeconds,
         bool $singleLine,
     ): void {
         $percent = $targetUsedBytes > 0
@@ -1259,7 +1263,7 @@ final class ClusterManager
 
         $message = sprintf(
             '[%s %.0f%%] %s/%s, %s keys',
-            $this->formatElapsed($elapsedSeconds),
+            $this->formatDuration($remainingSeconds ?? 0),
             $percent,
             $this->formatBytes($currentUsedBytes),
             $this->formatBytes($targetUsedBytes),
@@ -1269,12 +1273,12 @@ final class ClusterManager
         $this->output->progress($message, $singleLine);
     }
 
-    private function formatElapsed(float $elapsedSeconds): string
+    private function formatDuration(int $seconds): string
     {
-        $elapsed = max(0, (int) round($elapsedSeconds));
-        $hours = intdiv($elapsed, 3600);
-        $minutes = intdiv($elapsed % 3600, 60);
-        $seconds = $elapsed % 60;
+        $duration = max(0, $seconds);
+        $hours = intdiv($duration, 3600);
+        $minutes = intdiv($duration % 3600, 60);
+        $seconds = $duration % 60;
 
         return sprintf('%02d:%02d:%02d', $hours, $minutes, $seconds);
     }

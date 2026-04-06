@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `--watch` mode for `status` that refreshes output every second.
 - Added `flush`/`--flush` action that sends `FLUSHDB` to each primary node in the specified cluster(s).
 - Added `fill`/`--fill` action that populates keys until cluster primary memory usage reaches `--size`, with optional key type/member knobs and `--pin-primary` support.
-- Added periodic progress output for `fill`, including memory usage vs target, keys added, and elapsed time, with single-line TTY refresh and log-style non-TTY output.
+- Added periodic progress output for `fill`, including memory usage vs target, keys added, and time remaining estimates, with single-line TTY refresh and log-style non-TTY output.
 - Added `ClusterShardsParser` and status DTOs in `src/` for parsing PhpRedis RESP2-style alternating key/value shard data.
 - Added PHPUnit coverage for shard parsing and RESP2 key/value zipping behavior.
 - Added PHPUnit coverage for command line parsing of the `flush` action.
@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated `fill` default sizing so when both `--members` and `--member-size` are omitted it derives larger per-key payloads from `--size` using a 5,000-key target.
 - Updated `fill` sizing to accept `--keys` as an adaptive key-count target, influencing derived `--members` and `--member-size` when both are omitted.
 - Updated `fill` progress lines to a compact format: `[HH:MM:SS XX%] used/target, N keys`.
+- Updated `fill` progress timestamps to show an ETA-style countdown after enough progress has been observed, instead of elapsed time.
 - Updated `status`/`--watch` rendering to use a `php-tui` table when stdout is a TTY, with a defensive plain-text fallback for non-interactive output.
 - Updated status TUI rows to visually indent replicas with a `↳` prefix and shortened displayed node IDs to improve column readability.
 - Updated replica provisioning to inspect `CONFIG GET dir` on the primary node and reuse the same `/tmp/manage-cluster/...` cluster directory when applicable.
