@@ -17,7 +17,16 @@ final class CommandLineParserTest extends TestCase
         self::assertStringContainsString('bin/manage-cluster [OPTIONS] <COMMAND> [ARGS]', $usage);
         self::assertStringContainsString('Commands:', $usage);
         self::assertStringContainsString('start', $usage);
+        self::assertStringContainsString('list', $usage);
         self::assertStringContainsString('help', $usage);
+    }
+
+    public function testContextualUsageForStatusAllowsOptionalPort(): void
+    {
+        $usage = CommandLineParser::contextualUsage('status');
+
+        self::assertStringContainsString('bin/manage-cluster status [PORT] [--watch]', $usage);
+        self::assertStringContainsString('bin/manage-cluster status', $usage);
     }
 
     public function testContextualUsageForFillIncludesExamples(): void
@@ -89,6 +98,26 @@ final class CommandLineParserTest extends TestCase
         self::assertSame([7000], $options->ports);
     }
 
+    public function testParsesListActionWithoutPorts(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'list']);
+
+        self::assertSame('list', $options->action);
+        self::assertSame([], $options->ports);
+    }
+
+    public function testParsesStatusWithoutPorts(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'status']);
+
+        self::assertSame('status', $options->action);
+        self::assertSame([], $options->ports);
+    }
+
     public function testKillRequiresExactlyOneSeedPort(): void
     {
         $parser = new CommandLineParser();
@@ -107,6 +136,16 @@ final class CommandLineParserTest extends TestCase
         $this->expectExceptionMessage('--watch can only be used with status.');
 
         $parser->parse(['bin/manage-cluster', 'flush', '7000', '--watch']);
+    }
+
+    public function testListRejectsPorts(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('list does not accept seed ports.');
+
+        $parser->parse(['bin/manage-cluster', 'list', '7000']);
     }
 
     public function testParsesFillWithRequiredSizeAndNoPort(): void
@@ -195,6 +234,16 @@ final class CommandLineParserTest extends TestCase
         $this->expectExceptionMessage('--size can only be used with fill.');
 
         $parser->parse(['bin/manage-cluster', 'status', '7000', '--size', '1g']);
+    }
+
+    public function testStatusRejectsMoreThanOneSeedPort(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('status expects zero or one seed port.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '7001']);
     }
 
     public function testKeysIsRejectedOutsideFill(): void

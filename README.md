@@ -142,19 +142,32 @@ the CLI falls back to stopping the reachable cluster from that seed.
 ### `status`
 
 Reads `CLUSTER SHARDS`, fetches per-node memory usage, and renders shard and
-node status.
+node status. Without a seed port, it summarizes every managed cluster found in
+the configured state directory instead.
 
 ```bash
+bin/manage-cluster status
 bin/manage-cluster status 7000
 bin/manage-cluster status 7000 --watch
 ```
 
 Behavior notes:
 
+- Without a seed port, `status` reads the state index and summarizes all known
+  managed clusters
 - Uses a `php-tui` table when stdout is a TTY
 - Falls back to plain text for non-interactive output
 - Shows per-node used memory; unreachable nodes render `-`
 - `--watch` refreshes once per second
+
+### `list`
+
+Shows managed clusters that still appear to be running, based on saved metadata
+plus quick local port checks.
+
+```bash
+bin/manage-cluster list
+```
 
 ### `rebalance`
 

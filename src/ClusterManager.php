@@ -19,6 +19,7 @@ final class ClusterManager
         private readonly ClusterShardsParser $clusterShardsParser,
         private readonly ClusterStatusRenderer $clusterStatusRenderer,
         private readonly ClusterStatusTuiRenderer $clusterStatusTuiRenderer,
+        private readonly ManagedClusterSummaryRenderer $managedClusterSummaryRenderer,
         private readonly ClusterTreeSelector $clusterTreeSelector,
         private readonly ConsoleOutput $output,
     ) {
@@ -271,6 +272,12 @@ final class ClusterManager
 
     public function status(CommandLineOptions $options): void
     {
+        if ($options->ports === []) {
+            $this->renderManagedClusterSummary(watchMode: $options->watch, runningOnly: false);
+
+            return;
+        }
+
         $seedPort = $options->ports[0];
         $metadata = $this->stateStore->findClusterByPort($seedPort) ?? [];
 
@@ -312,6 +319,11 @@ final class ClusterManager
 
             usleep(1_000_000);
         }
+    }
+
+    public function list(CommandLineOptions $options): void
+    {
+        $this->renderManagedClusterSummary(watchMode: false, runningOnly: true);
     }
 
     /**
@@ -1432,6 +1444,122 @@ final class ClusterManager
         } catch (\Throwable) {
             return $this->redisNodeClient->fetchClusterShards($seedPort, !$tls, $caCert);
         }
+    }
+
+    private function renderManagedClusterSummary(bool $watchMode, bool $runningOnly): void
+    {
+        while (true) {
+            $clusters = $this->buildManagedClusterSummaries($runningOnly);
+
+            if ($watchMode) {
+                $this->clearTerminal();
+            }
+
+            fwrite(STDOUT, $this->managedClusterSummaryRenderer->render(
+                clusters: $clusters,
+                width: $this->detectTerminalWidth(),
+                watchMode: $watchMode,
+                runningOnly: $runningOnly,
+            ));
+
+            if (!$watchMode) {
+                return;
+            }
+
+            usleep(1_000_000);
+        }
+    }
+
+    /**
+     * @return list<array{
+     *   id: string,
+     *   seed_port: int,
+     *   port_range: string,
+     *   total_nodes: int,
+     *   listening_nodes: int,
+     *   replicas: int,
+     *   tls: bool
+     * }>
+     */
+    private function buildManagedClusterSummaries(bool $runningOnly): array
+    {
+        $summaries = [];
+        foreach ($this->stateStore->listClusters() as $metadata) {
+            $ports = $this->normalizeClusterPorts($metadata['ports'] ?? null);
+            if ($ports === []) {
+                continue;
+            }
+
+            $listeningNodes = 0;
+            foreach ($ports as $port) {
+                if ($this->systemInspector->isPortListening($port)) {
+                    $listeningNodes++;
+                }
+            }
+
+            if ($runningOnly && $listeningNodes === 0) {
+                continue;
+            }
+
+            $summaries[] = [
+                'id' => is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $ports[0]),
+                'seed_port' => $ports[0],
+                'port_range' => $this->formatPortRange($ports),
+                'total_nodes' => count($ports),
+                'listening_nodes' => $listeningNodes,
+                'replicas' => is_int($metadata['replicas'] ?? null) ? $metadata['replicas'] : (int) ($metadata['replicas'] ?? 0),
+                'tls' => (bool) ($metadata['tls'] ?? false),
+            ];
+        }
+
+        usort(
+            $summaries,
+            static fn (array $left, array $right): int => $left['seed_port'] <=> $right['seed_port'],
+        );
+
+        return $summaries;
+    }
+
+    /**
+     * @param mixed $ports
+     * @return list<int>
+     */
+    private function normalizeClusterPorts(mixed $ports): array
+    {
+        if (!is_array($ports)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($ports as $port) {
+            if (!is_int($port) && !is_string($port)) {
+                continue;
+            }
+
+            $normalized[] = (int) $port;
+        }
+
+        $normalized = array_values(array_unique($normalized));
+        sort($normalized, SORT_NUMERIC);
+
+        return $normalized;
+    }
+
+    /**
+     * @param list<int> $ports
+     */
+    private function formatPortRange(array $ports): string
+    {
+        $count = count($ports);
+        if ($count === 0) {
+            return '-';
+        }
+
+        if ($count === 1) {
+            return (string) $ports[0];
+        }
+
+        return sprintf('%d-%d', $ports[0], $ports[$count - 1]);
     }
 
     private function clearTerminal(): void

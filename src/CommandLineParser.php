@@ -11,7 +11,7 @@ final class CommandLineParser
     /**
      * @var list<string>
      */
-    private const array ACTIONS = ['start', 'stop', 'kill', 'rebalance', 'status', 'flush', 'fill', 'add-replica', 'restart-replica'];
+    private const array ACTIONS = ['start', 'stop', 'kill', 'rebalance', 'status', 'list', 'flush', 'fill', 'add-replica', 'restart-replica'];
 
     /**
      * @var array<string, string>
@@ -21,7 +21,8 @@ final class CommandLineParser
         'stop' => 'Stop every managed node in the cluster(s)',
         'kill' => 'Interactively stop one primary or replica from a seed node',
         'rebalance' => 'Rebalance slots across the selected cluster nodes',
-        'status' => 'Show shard and node status for one cluster',
+        'status' => 'Show shard and node status for one cluster, or summarize all managed clusters',
+        'list' => 'List managed clusters that appear to still be running',
         'flush' => 'Flush every primary in the selected cluster(s)',
         'fill' => 'Fill a cluster until its primaries reach a target size',
         'add-replica' => 'Add a new replica to a selected primary',
@@ -56,6 +57,9 @@ final class CommandLineParser
         'status' => [
             ['--redis-cli PATH', 'Path to redis-cli (default: redis-cli)'],
             ['--watch', 'Refresh the view every second'],
+            ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
+        ],
+        'list' => [
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'flush' => [
@@ -110,8 +114,12 @@ final class CommandLineParser
             'bin/manage-cluster rebalance 7000-7005',
         ],
         'status' => [
+            'bin/manage-cluster status',
             'bin/manage-cluster status 7000',
             'bin/manage-cluster status 7000 --watch',
+        ],
+        'list' => [
+            'bin/manage-cluster list',
         ],
         'flush' => [
             'bin/manage-cluster flush 7000',
@@ -143,6 +151,9 @@ final class CommandLineParser
         'fill' => [
             'PORT is optional when exactly one managed cluster exists in the state store.',
             'When both --members and --member-size are omitted, they are derived from --size.',
+        ],
+        'status' => [
+            'Without PORT, status summarizes every managed cluster found in the state store.',
         ],
         'add-replica' => [
             'The CLI opens an interactive primary picker before attaching the new replica.',
@@ -207,12 +218,13 @@ final class CommandLineParser
                 case '--kill':
                 case '--rebalance':
                 case '--status':
+                case '--list':
                 case '--flush':
                 case '--fill':
                 case '--add-replica':
                 case '--restart-replica':
                     if ($action !== null) {
-                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --kill, --rebalance, --status, --flush, --fill, --add-replica, or --restart-replica.');
+                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --kill, --rebalance, --status, --list, --flush, --fill, --add-replica, or --restart-replica.');
                     }
 
                     $action = ltrim($arg, '-');
@@ -301,7 +313,7 @@ final class CommandLineParser
                             break;
                         }
 
-                        throw new InvalidArgumentException(sprintf('Specify start/stop/kill/rebalance/status/flush/fill/add-replica/restart-replica (or --start/--stop/--kill/--rebalance/--status/--flush/--fill/--add-replica/--restart-replica) before ports (got: %s).', $arg));
+                        throw new InvalidArgumentException(sprintf('Specify start/stop/kill/rebalance/status/list/flush/fill/add-replica/restart-replica (or --start/--stop/--kill/--rebalance/--status/--list/--flush/--fill/--add-replica/--restart-replica) before ports (got: %s).', $arg));
                     }
 
                     $portTokens[] = $arg;
@@ -310,7 +322,7 @@ final class CommandLineParser
         }
 
         if ($action === null) {
-            throw new InvalidArgumentException('Missing action: use start/stop/kill/rebalance/status/flush/fill/add-replica/restart-replica (or --start/--stop/--kill/--rebalance/--status/--flush/--fill/--add-replica/--restart-replica).');
+            throw new InvalidArgumentException('Missing action: use start/stop/kill/rebalance/status/list/flush/fill/add-replica/restart-replica (or --start/--stop/--kill/--rebalance/--status/--list/--flush/--fill/--add-replica/--restart-replica).');
         }
 
         if ($action === 'start' && $replicas < 0) {
@@ -393,12 +405,16 @@ final class CommandLineParser
             $ports = $this->expandSingleStartPort($ports[0], $replicas);
         }
 
-        if ($action !== 'fill' && $ports === []) {
+        if (!in_array($action, ['fill', 'status', 'list'], true) && $ports === []) {
             throw new InvalidArgumentException('No ports provided');
         }
 
-        if ($action === 'status' && count($ports) !== 1) {
-            throw new InvalidArgumentException('status expects exactly one seed port.');
+        if ($action === 'status' && count($ports) > 1) {
+            throw new InvalidArgumentException('status expects zero or one seed port.');
+        }
+
+        if ($action === 'list' && count($ports) !== 0) {
+            throw new InvalidArgumentException('list does not accept seed ports.');
         }
 
         if ($action === 'kill' && count($ports) !== 1) {
@@ -479,7 +495,9 @@ final class CommandLineParser
         $lines[] = '';
         $lines[] = self::formatHeading('Examples', $interactive) . ':';
         $lines[] = '  bin/manage-cluster start 7000';
+        $lines[] = '  bin/manage-cluster status';
         $lines[] = '  bin/manage-cluster status 7000 --watch';
+        $lines[] = '  bin/manage-cluster list';
         $lines[] = '  bin/manage-cluster fill --size 1g';
         $lines[] = '  bin/manage-cluster help start';
         $lines[] = '';
@@ -739,7 +757,8 @@ final class CommandLineParser
             'stop' => 'bin/manage-cluster stop PORT [PORT ...]',
             'kill' => 'bin/manage-cluster kill PORT',
             'rebalance' => 'bin/manage-cluster rebalance PORT [PORT ...]',
-            'status' => 'bin/manage-cluster status PORT [--watch]',
+            'status' => 'bin/manage-cluster status [PORT] [--watch]',
+            'list' => 'bin/manage-cluster list',
             'flush' => 'bin/manage-cluster flush PORT [PORT ...]',
             'fill' => 'bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]',
             'add-replica' => 'bin/manage-cluster add-replica SEED_PORT [--port PORT]',

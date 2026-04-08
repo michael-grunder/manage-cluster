@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 ### Added
+- Added `list` action to show managed clusters that still appear to be running, including concise seed and port-range summaries from the saved state index.
 - Added `restart-replica`/`--restart-replica` action with an interactive filtered tree view that shows only primaries with failed replicas and restarts the selected failed replica from its existing node config.
 - Added `kill`/`--kill` action with an interactive cluster tree view for selecting and shutting down a single primary or replica from any seed node.
 - Added an interactive primary-selection view for `add-replica`, so the command can start from any cluster seed instead of requiring the target primary port.
@@ -35,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `start` support for passing arbitrary raw `redis-server`/`valkey-server` arguments after `--`, applying them to each started node.
 
 ### Changed
+- Updated `status` so `bin/manage-cluster status` with no seed port now summarizes all managed clusters discovered in the configured state directory, including `--watch` refreshes for that overview.
 - Updated `status`/`--watch` output to drop the redundant `Role` column by default and show per-node used memory, with `-` for unreachable nodes.
 - Reworked `README.md` into a release-ready guide with installation, quick
   start, command reference, state/TLS notes, PHAR build instructions, and
