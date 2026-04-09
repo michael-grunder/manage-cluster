@@ -161,6 +161,7 @@ Behavior notes:
 - Falls back to plain text for non-interactive output
 - Shows per-node used memory; unreachable nodes render `-`
 - `--watch` refreshes once per second in a fullscreen boxed TUI and relies on incremental redraws to avoid full-frame flashing
+- `--watch` also shows an independently probed per-node latency column; nodes that have not answered the latest background probe yet render as `pending`, slow/unresponsive probes render `timeout`, and hard failures render `down`
 
 ### `list`
 

@@ -289,38 +289,49 @@ final class ClusterManager
             ? (is_string($metadata['tls_material']['ca_cert'] ?? null) ? $metadata['tls_material']['ca_cert'] : null)
             : null;
 
-        while (true) {
-            $rawShards = $this->readClusterShardsWithFallback($seedPort, $tls, $caCert);
-            $shards = $this->enrichShardsWithUsedMemory(
-                $this->clusterShardsParser->parse($rawShards),
-                $tls,
-                $caCert,
-            );
+        $latencyMonitor = $options->watch ? $this->tryCreateLatencyMonitor($tls, $caCert) : null;
 
-            $renderedWithTui = $this->clusterStatusTuiRenderer->render(
-                shards: $shards,
-                seedPort: $seedPort,
-                watchMode: $options->watch,
-            );
+        try {
+            while (true) {
+                $rawShards = $this->readClusterShardsWithFallback($seedPort, $tls, $caCert);
+                $shards = $this->enrichShardsWithUsedMemory(
+                    $this->clusterShardsParser->parse($rawShards),
+                    $tls,
+                    $caCert,
+                );
+                $ports = $this->extractClusterPorts($shards);
+                $latencyMonitor?->updatePorts($ports);
+                $latenciesByPort = $latencyMonitor?->snapshotForPorts($ports) ?? [];
 
-            if (!$renderedWithTui) {
-                if ($options->watch) {
-                    $this->clearTerminal();
-                }
-
-                fwrite(STDOUT, $this->clusterStatusRenderer->render(
+                $renderedWithTui = $this->clusterStatusTuiRenderer->render(
                     shards: $shards,
-                    width: $this->detectTerminalWidth(),
                     seedPort: $seedPort,
                     watchMode: $options->watch,
-                ));
-            }
+                    latenciesByPort: $latenciesByPort,
+                );
 
-            if (!$options->watch) {
-                return;
-            }
+                if (!$renderedWithTui) {
+                    if ($options->watch) {
+                        $this->clearTerminal();
+                    }
 
-            usleep(1_000_000);
+                    fwrite(STDOUT, $this->clusterStatusRenderer->render(
+                        shards: $shards,
+                        width: $this->detectTerminalWidth(),
+                        seedPort: $seedPort,
+                        watchMode: $options->watch,
+                        latenciesByPort: $latenciesByPort,
+                    ));
+                }
+
+                if (!$options->watch) {
+                    return;
+                }
+
+                usleep(1_000_000);
+            }
+        } finally {
+            $latencyMonitor?->stop();
         }
     }
 
@@ -362,6 +373,15 @@ final class ClusterManager
             ),
             $shards,
         );
+    }
+
+    private function tryCreateLatencyMonitor(bool $tls, ?string $caCert): ?AsyncNodeLatencyMonitor
+    {
+        try {
+            return new AsyncNodeLatencyMonitor($tls, $caCert);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     public function flush(CommandLineOptions $options): void

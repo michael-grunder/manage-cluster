@@ -25,6 +25,7 @@ final class ClusterStatusTuiRenderer
     private const NODE_ID_LENGTH = 8;
     private const COLUMN_SPACING = 1;
     private const ID_COLUMN_WIDTH = self::NODE_ID_LENGTH + 1;
+    private const LATENCY_COLUMN_MIN_WIDTH = 8;
     private const HEALTH_COLUMN_MIN_WIDTH = 8;
 
     private ?Display $display = null;
@@ -33,8 +34,9 @@ final class ClusterStatusTuiRenderer
 
     /**
      * @param list<ClusterShardStatus> $shards
+     * @param array<int, NodeLatencySnapshot> $latenciesByPort
      */
-    public function render(array $shards, int $seedPort, bool $watchMode): bool
+    public function render(array $shards, int $seedPort, bool $watchMode, array $latenciesByPort = []): bool
     {
         if (!$this->supportsCurrentOutput()) {
             return false;
@@ -60,7 +62,7 @@ final class ClusterStatusTuiRenderer
                 $this->fullscreenMode = $fullscreenMode;
             }
 
-            $this->display->draw($this->buildRootWidget($shards, $watchMode));
+            $this->display->draw($this->buildRootWidget($shards, $watchMode, $latenciesByPort));
         } catch (Throwable) {
             $this->display = null;
             $this->viewportHeight = null;
@@ -97,14 +99,15 @@ final class ClusterStatusTuiRenderer
 
     /**
      * @param list<ClusterShardStatus> $shards
+     * @param array<int, NodeLatencySnapshot> $latenciesByPort
      */
-    private function buildRootWidget(array $shards, bool $watchMode): BlockWidget
+    private function buildRootWidget(array $shards, bool $watchMode, array $latenciesByPort = []): BlockWidget
     {
         $collapseHosts = ClusterNodeAddressFormatter::shouldCollapseHosts($shards);
         $table = TableWidget::default()
-            ->header($this->buildTableHeader())
-            ->rows(...$this->buildTableRows($shards, $collapseHosts))
-            ->widths(...$this->buildTableWidths($shards, $collapseHosts));
+            ->header($this->buildTableHeader($watchMode))
+            ->rows(...$this->buildTableRows($shards, $collapseHosts, $watchMode, $latenciesByPort))
+            ->widths(...$this->buildTableWidths($shards, $collapseHosts, $watchMode, $latenciesByPort));
         $table->columnSpacing = self::COLUMN_SPACING;
 
         $title = Title::fromString(sprintf(' Cluster Status%s ', $watchMode ? ' [watch]' : ''));
@@ -122,23 +125,37 @@ final class ClusterStatusTuiRenderer
 
     /**
      * @param list<ClusterShardStatus> $shards
+     * @param array<int, NodeLatencySnapshot> $latenciesByPort
      * @return list<Constraint>
      */
-    private function buildTableWidths(array $shards, bool $collapseHosts): array
+    private function buildTableWidths(array $shards, bool $collapseHosts, bool $watchMode, array $latenciesByPort): array
     {
-        return [
+        $widths = [
             Constraint::length($this->maxNodeColumnWidth($shards, $collapseHosts)),
             Constraint::length(self::ID_COLUMN_WIDTH),
             Constraint::length($this->maxSlotsColumnWidth($shards)),
             Constraint::length($this->maxOffsetColumnWidth($shards)),
             Constraint::length($this->maxMemoryColumnWidth($shards)),
-            Constraint::min(self::HEALTH_COLUMN_MIN_WIDTH),
         ];
+
+        if ($watchMode) {
+            $widths[] = Constraint::length($this->maxLatencyColumnWidth($shards, $latenciesByPort));
+        }
+
+        $widths[] = Constraint::min(self::HEALTH_COLUMN_MIN_WIDTH);
+
+        return $widths;
     }
 
-    private function buildTableHeader(): TableRow
+    private function buildTableHeader(bool $watchMode): TableRow
     {
-        $header = TableRow::fromStrings('Node', 'ID', 'Slots', 'Offset', 'Memory', 'Health');
+        $columns = ['Node', 'ID', 'Slots', 'Offset', 'Memory'];
+        if ($watchMode) {
+            $columns[] = 'Latency';
+        }
+        $columns[] = 'Health';
+
+        $header = TableRow::fromStrings(...$columns);
         $header->style = Style::default()->addModifier(Modifier::BOLD);
 
         return $header;
@@ -146,39 +163,62 @@ final class ClusterStatusTuiRenderer
 
     /**
      * @param list<ClusterShardStatus> $shards
+     * @param array<int, NodeLatencySnapshot> $latenciesByPort
      * @return list<TableRow>
      */
-    private function buildTableRows(array $shards, bool $collapseHosts): array
+    private function buildTableRows(array $shards, bool $collapseHosts, bool $watchMode, array $latenciesByPort): array
     {
         if ($shards === []) {
-            return [TableRow::fromStrings('No shard information returned.', '-', '-', '-', '-', '-')];
+            $columns = ['No shard information returned.', '-', '-', '-', '-'];
+            if ($watchMode) {
+                $columns[] = '-';
+            }
+            $columns[] = '-';
+
+            return [TableRow::fromStrings(...$columns)];
         }
 
         $rows = [];
         foreach ($shards as $shard) {
-            $rows[] = $this->buildNodeRow($shard->master, $shard->slotRange(), false, $collapseHosts);
+            $rows[] = $this->buildNodeRow($shard->master, $shard->slotRange(), false, $collapseHosts, $watchMode, $latenciesByPort);
             foreach ($shard->replicas as $replica) {
-                $rows[] = $this->buildNodeRow($replica, '-', true, $collapseHosts);
+                $rows[] = $this->buildNodeRow($replica, '-', true, $collapseHosts, $watchMode, $latenciesByPort);
             }
         }
 
         return $rows;
     }
 
-    private function buildNodeRow(ClusterNodeStatus $node, string $slots, bool $isReplica, bool $collapseHosts): TableRow
-    {
+    /**
+     * @param array<int, NodeLatencySnapshot> $latenciesByPort
+     */
+    private function buildNodeRow(
+        ClusterNodeStatus $node,
+        string $slots,
+        bool $isReplica,
+        bool $collapseHosts,
+        bool $watchMode,
+        array $latenciesByPort,
+    ): TableRow {
         $address = $isReplica
             ? self::REPLICA_PREFIX . $node->displayAddress($collapseHosts)
             : $node->displayAddress($collapseHosts);
 
-        return TableRow::fromStrings(
+        $columns = [
             $address,
             $node->shortId(self::NODE_ID_LENGTH),
             $slots,
             (string) $node->replicationOffset,
             MemoryUsageFormatter::format($node->usedMemoryBytes),
-            $node->health,
-        );
+        ];
+
+        if ($watchMode) {
+            $columns[] = ($latenciesByPort[$node->port] ?? new NodeLatencySnapshot(NodeLatencyState::Pending))->displayValue();
+        }
+
+        $columns[] = $node->health;
+
+        return TableRow::fromStrings(...$columns);
     }
 
     /**
@@ -246,6 +286,28 @@ final class ClusterStatusTuiRenderer
         }
 
         return $width;
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     * @param array<int, NodeLatencySnapshot> $latenciesByPort
+     */
+    private function maxLatencyColumnWidth(array $shards, array $latenciesByPort): int
+    {
+        $width = $this->stringWidth('Latency');
+
+        foreach ($shards as $shard) {
+            foreach ([$shard->master, ...$shard->replicas] as $node) {
+                $width = max(
+                    $width,
+                    $this->stringWidth(
+                        ($latenciesByPort[$node->port] ?? new NodeLatencySnapshot(NodeLatencyState::Pending))->displayValue(),
+                    ),
+                );
+            }
+        }
+
+        return max(self::LATENCY_COLUMN_MIN_WIDTH, $width);
     }
 
     private function stringWidth(string $value): int
