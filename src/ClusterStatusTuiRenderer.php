@@ -23,6 +23,7 @@ final class ClusterStatusTuiRenderer
 {
     private const REPLICA_PREFIX = '↳ ';
     private const NODE_ID_LENGTH = 8;
+    private const COLUMN_SPACING = 1;
     private const ID_COLUMN_WIDTH = self::NODE_ID_LENGTH + 1;
     private const HEALTH_COLUMN_MIN_WIDTH = 8;
 
@@ -104,6 +105,7 @@ final class ClusterStatusTuiRenderer
             ->header($this->buildTableHeader())
             ->rows(...$this->buildTableRows($shards, $collapseHosts))
             ->widths(...$this->buildTableWidths($shards, $collapseHosts));
+        $table->columnSpacing = self::COLUMN_SPACING;
 
         $title = Title::fromString(sprintf(' Cluster Status%s ', $watchMode ? ' [watch]' : ''));
         $clock = Title::fromString(sprintf(' %s ', date('H:i:s')))
@@ -125,11 +127,11 @@ final class ClusterStatusTuiRenderer
     private function buildTableWidths(array $shards, bool $collapseHosts): array
     {
         return [
-            Constraint::max($this->maxNodeColumnWidth($shards, $collapseHosts)),
+            Constraint::length($this->maxNodeColumnWidth($shards, $collapseHosts)),
             Constraint::length(self::ID_COLUMN_WIDTH),
-            Constraint::max($this->maxSlotsColumnWidth($shards)),
-            Constraint::max($this->maxOffsetColumnWidth($shards)),
-            Constraint::max($this->maxMemoryColumnWidth($shards)),
+            Constraint::length($this->maxSlotsColumnWidth($shards)),
+            Constraint::length($this->maxOffsetColumnWidth($shards)),
+            Constraint::length($this->maxMemoryColumnWidth($shards)),
             Constraint::min(self::HEALTH_COLUMN_MIN_WIDTH),
         ];
     }

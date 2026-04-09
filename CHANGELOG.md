@@ -80,5 +80,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed status TUI column sizing so node IDs no longer run into role labels, and reduced excess spacing between the `Node` and `ID` columns.
 - Fixed status TUI column widths for `ID`, `Role`, `Slots`, and `Offset` so adjacent values always have visible separation.
 - Fixed `status --watch` table sizing to cap the `Node` column to actual content width so long replication offsets can use available terminal space instead of bleeding into `Memory`.
+- Fixed status TUI table rendering to keep `Offset` content inside its column by using fixed content-width columns plus explicit inter-column spacing.
 - Fixed `CLUSTER SHARDS` parsing to preserve full node IDs instead of truncating them during parsing.
 - Fixed redundant type checks in `RedisNodeClient::discoverClusterPorts()` flagged by PHPStan (`function.alreadyNarrowedType`).

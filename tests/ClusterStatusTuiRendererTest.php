@@ -9,7 +9,6 @@ use Mgrunder\CreateCluster\ClusterShardStatus;
 use Mgrunder\CreateCluster\ClusterStatusTuiRenderer;
 use PhpTui\Tui\Extension\Core\Widget\TableWidget;
 use PhpTui\Tui\Layout\Constraint\LengthConstraint;
-use PhpTui\Tui\Layout\Constraint\MaxConstraint;
 use PhpTui\Tui\Layout\Constraint\MinConstraint;
 use PhpTui\Tui\Widget\HorizontalAlignment;
 use PHPUnit\Framework\TestCase;
@@ -58,17 +57,18 @@ final class ClusterStatusTuiRendererTest extends TestCase
         $widget = $this->invokeBuildRootWidget($renderer, $this->sampleShards(), true);
 
         self::assertInstanceOf(TableWidget::class, $widget->widget);
+        self::assertSame(1, $widget->widget->columnSpacing);
         self::assertCount(6, $widget->widget->widths);
-        self::assertInstanceOf(MaxConstraint::class, $widget->widget->widths[0]);
-        self::assertSame(6, $widget->widget->widths[0]->max);
+        self::assertInstanceOf(LengthConstraint::class, $widget->widget->widths[0]);
+        self::assertSame(6, $widget->widget->widths[0]->length);
         self::assertInstanceOf(LengthConstraint::class, $widget->widget->widths[1]);
         self::assertSame(9, $widget->widget->widths[1]->length);
-        self::assertInstanceOf(MaxConstraint::class, $widget->widget->widths[2]);
-        self::assertSame(6, $widget->widget->widths[2]->max);
-        self::assertInstanceOf(MaxConstraint::class, $widget->widget->widths[3]);
-        self::assertSame(6, $widget->widget->widths[3]->max);
-        self::assertInstanceOf(MaxConstraint::class, $widget->widget->widths[4]);
-        self::assertSame(7, $widget->widget->widths[4]->max);
+        self::assertInstanceOf(LengthConstraint::class, $widget->widget->widths[2]);
+        self::assertSame(6, $widget->widget->widths[2]->length);
+        self::assertInstanceOf(LengthConstraint::class, $widget->widget->widths[3]);
+        self::assertSame(6, $widget->widget->widths[3]->length);
+        self::assertInstanceOf(LengthConstraint::class, $widget->widget->widths[4]);
+        self::assertSame(7, $widget->widget->widths[4]->length);
         self::assertInstanceOf(MinConstraint::class, $widget->widget->widths[5]);
         self::assertSame(8, $widget->widget->widths[5]->min);
     }
