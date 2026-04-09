@@ -240,20 +240,8 @@ final class RedisNodeClient
     public function tryFetchUsedMemoryBytes(int $port, bool $tls, ?string $caCert): ?int
     {
         try {
-            $redis = $this->connectToNode($port, $tls, $caCert);
+            $info = $this->fetchInfo($port, $tls, $caCert, 'memory');
         } catch (RedisException|RuntimeException) {
-            return null;
-        }
-
-        try {
-            $info = $redis->info('memory');
-        } catch (RedisException) {
-            return null;
-        } finally {
-            $redis->close();
-        }
-
-        if (!is_array($info)) {
             return null;
         }
 
@@ -263,6 +251,60 @@ final class RedisNodeClient
         }
 
         return (int) $used;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function fetchInfo(int $port, bool $tls, ?string $caCert, ?string $section = null): array
+    {
+        $redis = $this->connectToNode($port, $tls, $caCert);
+
+        try {
+            $info = $section === null ? $redis->info() : $redis->info($section);
+        } finally {
+            $redis->close();
+        }
+
+        if (!is_array($info)) {
+            throw new RuntimeException(sprintf('INFO returned an unexpected response for port %d.', $port));
+        }
+
+        return $info;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function fetchClusterInfo(int $port, bool $tls, ?string $caCert): array
+    {
+        $redis = $this->connectToNode($port, $tls, $caCert);
+
+        try {
+            $raw = $redis->rawCommand('CLUSTER', 'INFO');
+        } finally {
+            $redis->close();
+        }
+
+        if (!is_string($raw) || trim($raw) === '') {
+            throw new RuntimeException(sprintf('CLUSTER INFO returned an unexpected response for port %d.', $port));
+        }
+
+        $info = [];
+        foreach (preg_split('/\R/', trim($raw)) as $line) {
+            if ($line === '') {
+                continue;
+            }
+
+            [$key, $value] = array_pad(explode(':', $line, 2), 2, null);
+            if (!is_string($key) || !is_string($value) || $key === '') {
+                continue;
+            }
+
+            $info[$key] = trim($value);
+        }
+
+        return $info;
     }
 
     public function connectToNode(int $port, bool $tls, ?string $caCert): Redis

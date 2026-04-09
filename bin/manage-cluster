@@ -105,6 +105,10 @@ try {
             $manager->restartReplica($options);
             break;
 
+        case 'chaos':
+            $manager->chaos($options);
+            break;
+
         default:
             throw new RuntimeException(sprintf('Unsupported action: %s', $options->action));
     }

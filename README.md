@@ -23,6 +23,8 @@ cluster management.
 - Interactively kill a selected primary or replica.
 - Interactively add a replica to a selected primary.
 - Interactively restart a failed replica from saved node metadata.
+- Run serialized replica-chaos loops that kill, restart, and add replicas while
+  waiting for the cluster to converge between each step.
 - Start TLS-only local clusters with ephemeral certificates.
 - Generate a standalone startup shell script instead of starting immediately.
 - Build a single-file PHAR binary for distribution.
@@ -258,6 +260,44 @@ Behavior notes:
 
 - Requires an interactive TTY
 - Only failed replica rows are selectable
+
+### `chaos`
+
+Runs a conservative, serialized chaos loop aimed at replica churn rather than a
+fully generic chaos monkey.
+
+```bash
+bin/manage-cluster chaos 7000
+bin/manage-cluster chaos 7000 --categories replica-kill,replica-restart
+bin/manage-cluster chaos 7000 --max-events 50
+bin/manage-cluster chaos 7000 --interval 8 --watch
+bin/manage-cluster chaos 7000 --dry-run
+```
+
+Useful options:
+
+- `--categories LIST` limits event selection to `replica-kill`,
+  `replica-restart`, `replica-remove`, `replica-add`, and `slot-migration`
+- `--interval SECONDS` sets the minimum time between completed steps
+- `--max-events N` stops after N completed events
+- `--max-failures N` aborts after N consecutive planning or execution failures
+- `--dry-run` prints the next planned event without mutating the cluster
+- `--watch` prints compact state and convergence progress
+- `--seed N` seeds the PRNG for reproducible event selection
+- `--wait-timeout SECONDS` bounds the post-event convergence wait
+- `--cooldown SECONDS` adds a quiet period after convergence
+- `--unsafe` allows lower-redundancy actions that are otherwise skipped
+
+Behavior notes:
+
+- v1 actively executes `replica-kill`, `replica-restart`, and `replica-add`
+- `replica-remove` and `slot-migration` are parsed for forward compatibility but
+  remain disabled by the conservative v1 planner
+- The loop keeps in-memory runtime history so follow-up actions can repair or
+  extend earlier replica churn instead of choosing stateless random actions
+- Only one mutation is in flight at a time, and each event must satisfy a
+  topology-based postcondition before the next one can start
+- `--dry-run` with no `--max-events` prints a single planned step and exits
 - Requires saved managed-cluster metadata in the configured `--state-dir`
 
 ### `help`

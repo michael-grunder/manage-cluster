@@ -10,6 +10,9 @@ use Symfony\Component\Process\Process;
 
 final class ClusterManager
 {
+    private const int CHAOS_STABLE_POLLS = 2;
+    private const int CHAOS_PRIMARY_REPLICA_CAP = 2;
+
     public function __construct(
         private readonly SystemInspector $systemInspector,
         private readonly ClusterStateStore $stateStore,
@@ -560,72 +563,18 @@ final class ClusterManager
         $primaryPort = $primaryNode->port;
         $this->output->info(sprintf('Selected primary %s', $primaryNode->address()));
 
-        $usedPorts = $this->extractClusterPorts($shards);
-        $replicaPort = $options->replicaPort ?? $this->selectReplicaPortOutsideClusterRange($usedPorts);
-        if (in_array($replicaPort, $usedPorts, true)) {
-            throw new RuntimeException(sprintf('Requested replica port %d is already part of the cluster.', $replicaPort));
-        }
-
-        if ($this->systemInspector->isPortListening($replicaPort)) {
-            throw new RuntimeException(sprintf('Port %d is already in use.', $replicaPort));
-        }
-
-        $clusterDir = $this->resolveReplicaClusterDirectory($primaryPort, $tls, $caCert, $metadata);
-        $this->output->info(sprintf('Using cluster directory %s', $clusterDir));
-
-        $configPath = $this->writeNodeConfiguration(
-            clusterDir: $clusterDir,
-            port: $replicaPort,
-            announceIp: $options->announceIp,
+        $replicaPort = $this->createReplicaForPrimary(
+            options: $options,
+            metadata: $metadata,
+            seedPort: $seedPort,
+            primaryNode: $primaryNode,
             tls: $tls,
+            caCert: $caCert,
             tlsMaterial: $tlsMaterial,
+            rawShards: $shards,
         );
 
-        $this->output->step(sprintf('Starting Redis node on port %d', $replicaPort));
-        try {
-            $this->runProcess([$options->redisBinary, $configPath]);
-            $this->redisNodeClient->waitForReady($replicaPort, $tls, $caCert);
-            $this->output->success(sprintf('Redis node %d is ready', $replicaPort));
-
-            $meetHost = $primaryNode->endpoint !== ''
-                ? $primaryNode->endpoint
-                : ($primaryNode->ip !== '' ? $primaryNode->ip : '127.0.0.1');
-
-            $this->output->step(sprintf('Sending CLUSTER MEET to %s:%d', $meetHost, $primaryNode->port));
-            $this->redisNodeClient->clusterMeet($replicaPort, $tls, $caCert, $meetHost, $primaryNode->port);
-            $this->redisNodeClient->waitForKnownClusterNode($replicaPort, $tls, $caCert, $primaryNode->id);
-            $this->output->success('Replica joined cluster gossip');
-
-            $this->output->step(sprintf('Sending CLUSTER REPLICATE %s', $primaryNode->shortId()));
-            $this->redisNodeClient->clusterReplicate($replicaPort, $tls, $caCert, $primaryNode->id);
-            $this->waitForReplicaAttachment($seedPort, $primaryPort, $replicaPort, $tls, $caCert);
-            $this->output->success(sprintf('Replica %d attached to primary %d', $replicaPort, $primaryPort));
-        } catch (\Throwable $exception) {
-            $this->output->warning(sprintf('Replica setup failed; shutting down port %d', $replicaPort));
-            $this->redisNodeClient->shutdown($replicaPort, $tls, $caCert);
-            $this->systemInspector->waitForPortsToClose([$replicaPort]);
-            throw $exception;
-        }
-
-        if (is_array($metadata)) {
-            $ports = $metadata['ports'] ?? [];
-            if (is_array($ports)) {
-                $ports[] = $replicaPort;
-                $normalized = [];
-                foreach ($ports as $port) {
-                    if (!is_int($port) && !is_string($port)) {
-                        continue;
-                    }
-
-                    $normalized[] = (int) $port;
-                }
-
-                $normalized = array_values(array_unique($normalized));
-                sort($normalized, SORT_NUMERIC);
-                $metadata['ports'] = $normalized;
-                $this->stateStore->persistClusterMetadata($metadata);
-            }
-        }
+        $this->output->success(sprintf('Replica %d attached to primary %d', $replicaPort, $primaryPort));
     }
 
     public function restartReplica(CommandLineOptions $options): void
@@ -665,17 +614,912 @@ final class ClusterManager
             throw new RuntimeException(sprintf('Selected replica %s is not in fail state.', $selectedReplica->address()));
         }
 
-        $configPath = $this->resolveExistingNodeConfigPath($metadata, $selectedReplica->port);
+        $this->restartReplicaPort($selectedReplica->port, $metadata, $options, $tls, $caCert);
+        $this->output->success(sprintf('Replica %s restarted', $selectedReplica->address()));
+    }
+
+    public function chaos(CommandLineOptions $options): void
+    {
+        $chaos = $options->chaos;
+        if (!$chaos instanceof ChaosOptions) {
+            throw new RuntimeException('Missing chaos options.');
+        }
+
+        $implementedCategories = [
+            ChaosOptions::CATEGORY_REPLICA_KILL,
+            ChaosOptions::CATEGORY_REPLICA_RESTART,
+            ChaosOptions::CATEGORY_REPLICA_ADD,
+        ];
+
+        if (array_intersect($chaos->categories, $implementedCategories) === []) {
+            throw new RuntimeException('chaos v1 currently implements replica-kill, replica-restart, and replica-add.');
+        }
+
+        if ($chaos->seed !== null) {
+            mt_srand($chaos->seed);
+            $this->output->info(sprintf('Using chaos PRNG seed %d', $chaos->seed));
+        }
+
+        $seedPort = $options->ports[0];
+        $metadata = $this->stateStore->findClusterByPort($seedPort);
+        if (!is_array($metadata)) {
+            throw new RuntimeException(sprintf('chaos requires managed cluster metadata for seed port %d.', $seedPort));
+        }
+
+        [$tls, $caCert] = $this->resolveSeedConnectionContext($seedPort, $metadata);
+        $runtime = new ChaosRuntimeState(
+            clusterId: is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort),
+            seedPort: $seedPort,
+            startedAt: microtime(true),
+            allowedCategories: $chaos->categories,
+        );
+
+        $dryRunBudget = $chaos->dryRun && $chaos->maxEvents === null ? 1 : $chaos->maxEvents;
+
+        while (true) {
+            if ($dryRunBudget !== null && $runtime->completedEventCount() >= $dryRunBudget) {
+                $this->output->success(sprintf('Chaos finished after %d planned events.', $runtime->completedEventCount()));
+
+                return;
+            }
+
+            $view = $this->discoverChaosClusterView($runtime, $metadata, $seedPort, $tls, $caCert);
+            if ($view->clusterDown) {
+                throw new RuntimeException('Refusing to continue chaos while the cluster reports CLUSTERDOWN.');
+            }
+
+            if (!$view->broadlyHealthy && $view->degradedPrimaryPorts === []) {
+                throw new RuntimeException('Cluster is broadly unhealthy; chaos aborted before stacking more topology churn.');
+            }
+
+            $candidate = $this->selectChaosCandidate($view, $runtime, $chaos);
+            if (!$candidate instanceof ChaosCandidateEvent) {
+                $runtime->markFailure();
+                if ($runtime->consecutiveFailures >= $chaos->maxFailures) {
+                    throw new RuntimeException(sprintf(
+                        'Chaos failed to select a safe event %d times in a row; aborting.',
+                        $runtime->consecutiveFailures,
+                    ));
+                }
+
+                $this->emitChaosWatchLine($chaos, sprintf(
+                    '[wait ] no eligible events (failure %d/%d)',
+                    $runtime->consecutiveFailures,
+                    $chaos->maxFailures,
+                ));
+                sleep(1);
+                continue;
+            }
+
+            $event = new ChaosEventRecord(
+                id: $runtime->nextEventId(),
+                category: $candidate->category,
+                status: 'planned',
+                targetPort: $candidate->targetPort,
+                targetPrimaryPort: $candidate->targetPrimaryPort,
+                startedAt: microtime(true),
+                completedAt: null,
+                summary: $candidate->summary,
+                postcondition: $candidate->postcondition,
+                reasons: $candidate->reasons,
+            );
+            $runtime->inflightEvent = $event;
+            $this->emitChaosWatchLine($chaos, sprintf('[chaos] event#%d %s', $event->id, $event->summary));
+
+            if ($chaos->dryRun) {
+                $planned = $event->withStatus('completed', microtime(true), ['dry-run']);
+                $runtime->rememberHistory($planned);
+                $runtime->inflightEvent = null;
+                $runtime->resetFailures();
+                $this->emitChaosWatchLine($chaos, sprintf(
+                    '[plan ] %s | because: %s',
+                    $planned->summary,
+                    implode('; ', $candidate->reasons),
+                ));
+                continue;
+            }
+
+            try {
+                $running = $event->withStatus('running');
+                $runtime->inflightEvent = $running;
+                $this->executeChaosEvent($running, $view, $runtime, $options, $metadata, $tls, $caCert);
+
+                $waiting = $running->withStatus('waiting');
+                $runtime->inflightEvent = $waiting;
+                $completed = $this->waitForChaosEventConvergence($waiting, $runtime, $metadata, $seedPort, $tls, $caCert, $chaos);
+                $runtime->rememberHistory($completed);
+                $runtime->inflightEvent = null;
+                $runtime->resetFailures();
+
+                $elapsedSeconds = $completed->completedAt !== null ? max(0.0, $completed->completedAt - $completed->startedAt) : 0.0;
+                $this->emitChaosWatchLine($chaos, sprintf('[done ] %s completed in %.1fs', $completed->summary, $elapsedSeconds));
+            } catch (\Throwable $exception) {
+                $runtime->markFailure();
+                $failed = $event->withStatus('failed', microtime(true), [$exception->getMessage()]);
+                $runtime->rememberHistory($failed);
+                $runtime->inflightEvent = null;
+
+                if ($runtime->consecutiveFailures >= $chaos->maxFailures) {
+                    throw new RuntimeException(sprintf(
+                        'Chaos aborted after %d consecutive failures. Last error: %s',
+                        $runtime->consecutiveFailures,
+                        $exception->getMessage(),
+                    ), previous: $exception);
+                }
+
+                $this->output->warning($exception->getMessage());
+                sleep(1);
+                continue;
+            }
+
+            $this->sleepBetweenChaosSteps($chaos);
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $metadata
+     * @param list<ClusterShardStatus> $rawShards
+     * @param array{ca_cert: string, server_cert: string, server_key: string}|null $tlsMaterial
+     */
+    private function createReplicaForPrimary(
+        CommandLineOptions $options,
+        ?array $metadata,
+        int $seedPort,
+        ClusterNodeStatus $primaryNode,
+        bool $tls,
+        ?string $caCert,
+        ?array $tlsMaterial,
+        array $rawShards,
+        ?int $replicaPort = null,
+    ): int {
+        $usedPorts = $this->extractClusterPorts($rawShards);
+        $selectedReplicaPort = $replicaPort ?? $options->replicaPort ?? $this->selectReplicaPortOutsideClusterRange($usedPorts);
+        if (in_array($selectedReplicaPort, $usedPorts, true)) {
+            throw new RuntimeException(sprintf('Requested replica port %d is already part of the cluster.', $selectedReplicaPort));
+        }
+
+        if ($this->systemInspector->isPortListening($selectedReplicaPort)) {
+            throw new RuntimeException(sprintf('Port %d is already in use.', $selectedReplicaPort));
+        }
+
+        $clusterDir = $this->resolveReplicaClusterDirectory($primaryNode->port, $tls, $caCert, $metadata);
+        $this->output->info(sprintf('Using cluster directory %s', $clusterDir));
+
+        $configPath = $this->writeNodeConfiguration(
+            clusterDir: $clusterDir,
+            port: $selectedReplicaPort,
+            announceIp: $options->announceIp,
+            tls: $tls,
+            tlsMaterial: $tlsMaterial,
+        );
+
+        $this->output->step(sprintf('Starting Redis node on port %d', $selectedReplicaPort));
+        try {
+            $this->runProcess([$options->redisBinary, $configPath]);
+            $this->redisNodeClient->waitForReady($selectedReplicaPort, $tls, $caCert);
+            $this->output->success(sprintf('Redis node %d is ready', $selectedReplicaPort));
+
+            $meetHost = $primaryNode->endpoint !== ''
+                ? $primaryNode->endpoint
+                : ($primaryNode->ip !== '' ? $primaryNode->ip : '127.0.0.1');
+
+            $this->output->step(sprintf('Sending CLUSTER MEET to %s:%d', $meetHost, $primaryNode->port));
+            $this->redisNodeClient->clusterMeet($selectedReplicaPort, $tls, $caCert, $meetHost, $primaryNode->port);
+            $this->redisNodeClient->waitForKnownClusterNode($selectedReplicaPort, $tls, $caCert, $primaryNode->id);
+            $this->output->success('Replica joined cluster gossip');
+
+            $this->output->step(sprintf('Sending CLUSTER REPLICATE %s', $primaryNode->shortId()));
+            $this->redisNodeClient->clusterReplicate($selectedReplicaPort, $tls, $caCert, $primaryNode->id);
+            $this->waitForReplicaAttachment($seedPort, $primaryNode->port, $selectedReplicaPort, $tls, $caCert);
+        } catch (\Throwable $exception) {
+            $this->output->warning(sprintf('Replica setup failed; shutting down port %d', $selectedReplicaPort));
+            $this->redisNodeClient->shutdown($selectedReplicaPort, $tls, $caCert);
+            $this->systemInspector->waitForPortsToClose([$selectedReplicaPort]);
+            throw $exception;
+        }
+
+        $this->persistClusterMetadataPortAddition($metadata, $selectedReplicaPort);
+
+        return $selectedReplicaPort;
+    }
+
+    /**
+     * @param array<string, mixed> $metadata
+     */
+    private function restartReplicaPort(int $port, array $metadata, CommandLineOptions $options, bool $tls, ?string $caCert): void
+    {
+        $configPath = $this->resolveExistingNodeConfigPath($metadata, $port);
         $redisBinary = $this->resolveRedisBinaryForRestart($metadata, $options);
 
-        $this->output->step(sprintf('Restarting failed replica %s', $selectedReplica->address()));
+        $this->output->step(sprintf('Restarting failed replica %d', $port));
         $this->runProcess([$redisBinary, $configPath]);
-        $this->redisNodeClient->waitForReady($selectedReplica->port, $tls, $caCert);
-        $this->output->success(sprintf(
-            'Replica %s restarted using %s',
-            $selectedReplica->address(),
-            basename($configPath),
+        $this->redisNodeClient->waitForReady($port, $tls, $caCert);
+        $this->output->success(sprintf('Replica %d restarted using %s', $port, basename($configPath)));
+    }
+
+    /**
+     * @param array<string, mixed> $metadata
+     */
+    private function discoverChaosClusterView(
+        ChaosRuntimeState $runtime,
+        array $metadata,
+        int $seedPort,
+        bool $tls,
+        ?string $caCert,
+    ): ChaosClusterView {
+        $rawShards = $this->readClusterShardsWithFallback($seedPort, $tls, $caCert);
+        $shards = $this->clusterShardsParser->parse($rawShards);
+        if ($shards === []) {
+            throw new RuntimeException(sprintf('Unable to parse cluster topology from seed port %d.', $seedPort));
+        }
+
+        $clusterInfo = $this->readClusterInfoWithFallback($seedPort, $tls, $caCert);
+        $clusterDown = ($clusterInfo['cluster_state'] ?? 'ok') !== 'ok';
+        $managedPorts = $this->readManagedPorts($metadata);
+        $currentPrimaryPorts = [];
+        $currentReplicaPorts = [];
+        $nodeStateByPort = [];
+        $replicaPortsByPrimary = [];
+
+        foreach ($shards as $shard) {
+            $currentPrimaryPorts[$shard->master->port] = true;
+            $slotRange = $shard->slotRange();
+
+            $masterInfo = $this->tryFetchNodeInfo($shard->master->port, $tls, $caCert);
+            $nodeStateByPort[$shard->master->port] = $this->buildChaosNodeState(
+                port: $shard->master->port,
+                nodeId: $shard->master->id,
+                role: 'primary',
+                primaryPort: null,
+                knownByCluster: true,
+                reachable: $masterInfo !== null || $this->systemInspector->isPortListening($shard->master->port),
+                health: $shard->master->health,
+                slotRanges: [$slotRange],
+                managed: in_array($shard->master->port, $managedPorts, true),
+                info: $masterInfo,
+                clusterDir: is_string($metadata['cluster_dir'] ?? null) ? $metadata['cluster_dir'] : null,
+            );
+
+            foreach ($shard->replicas as $replica) {
+                $currentReplicaPorts[$replica->port] = true;
+                $replicaPortsByPrimary[$shard->master->port][] = $replica->port;
+                $runtime->rememberReplicaPrimary($replica->port, $shard->master->port);
+                $replicaInfo = $this->tryFetchNodeInfo($replica->port, $tls, $caCert);
+                $nodeStateByPort[$replica->port] = $this->buildChaosNodeState(
+                    port: $replica->port,
+                    nodeId: $replica->id,
+                    role: 'replica',
+                    primaryPort: $shard->master->port,
+                    knownByCluster: true,
+                    reachable: $replicaInfo !== null || $this->systemInspector->isPortListening($replica->port),
+                    health: $replica->health,
+                    slotRanges: [],
+                    managed: in_array($replica->port, $managedPorts, true),
+                    info: $replicaInfo,
+                    clusterDir: is_string($metadata['cluster_dir'] ?? null) ? $metadata['cluster_dir'] : null,
+                );
+            }
+        }
+
+        foreach ($managedPorts as $managedPort) {
+            if (isset($nodeStateByPort[$managedPort])) {
+                continue;
+            }
+
+            $runtimePrimaryPort = $runtime->lastKnownPrimaryForReplica($managedPort);
+            $info = $this->tryFetchNodeInfo($managedPort, $tls, $caCert);
+            $nodeStateByPort[$managedPort] = $this->buildChaosNodeState(
+                port: $managedPort,
+                nodeId: '',
+                role: $runtimePrimaryPort !== null ? 'replica' : 'unknown',
+                primaryPort: $runtimePrimaryPort,
+                knownByCluster: false,
+                reachable: $info !== null || $this->systemInspector->isPortListening($managedPort),
+                health: 'unknown',
+                slotRanges: [],
+                managed: true,
+                info: $info,
+                clusterDir: is_string($metadata['cluster_dir'] ?? null) ? $metadata['cluster_dir'] : null,
+            );
+        }
+
+        ksort($nodeStateByPort, SORT_NUMERIC);
+
+        $primaryStateByPort = [];
+        foreach ($shards as $shard) {
+            $replicaPorts = $replicaPortsByPrimary[$shard->master->port] ?? [];
+            $healthyReplicaCount = 0;
+            $syncingReplicaCount = 0;
+            $failedReplicaCount = 0;
+
+            foreach ($replicaPorts as $replicaPort) {
+                $replicaState = $nodeStateByPort[$replicaPort] ?? null;
+                if (!$replicaState instanceof ChaosNodeState) {
+                    continue;
+                }
+
+                if ($replicaState->isHealthyReplica()) {
+                    $healthyReplicaCount++;
+                }
+
+                if ($replicaState->isSyncing) {
+                    $syncingReplicaCount++;
+                }
+
+                if ($replicaState->isFailed || !$replicaState->reachable) {
+                    $failedReplicaCount++;
+                }
+            }
+
+            $masterState = $nodeStateByPort[$shard->master->port];
+            $primaryStateByPort[$shard->master->port] = new ChaosPrimaryState(
+                port: $shard->master->port,
+                nodeId: $shard->master->id,
+                reachable: $masterState->reachable && !$masterState->isFailed,
+                slotRanges: [$shard->slotRange()],
+                replicaPorts: $replicaPorts,
+                healthyReplicaCount: $healthyReplicaCount,
+                syncingReplicaCount: $syncingReplicaCount,
+                failedReplicaCount: $failedReplicaCount,
+            );
+        }
+
+        $replicaStateByPort = [];
+        foreach ($nodeStateByPort as $port => $nodeState) {
+            if ($nodeState->role === 'replica') {
+                $replicaStateByPort[$port] = $nodeState;
+            }
+        }
+
+        $degradedPrimaryPorts = [];
+        foreach ($primaryStateByPort as $primaryPort => $primaryState) {
+            if ($primaryState->isDegraded()) {
+                $degradedPrimaryPorts[] = $primaryPort;
+            }
+        }
+
+        sort($degradedPrimaryPorts, SORT_NUMERIC);
+        $topologyHash = $this->buildChaosTopologyHash($nodeStateByPort, $primaryStateByPort, $clusterDown);
+        $allPrimariesReachable = array_reduce(
+            $primaryStateByPort,
+            static fn (bool $carry, ChaosPrimaryState $primary): bool => $carry && $primary->reachable,
+            true,
+        );
+
+        return new ChaosClusterView(
+            clusterId: is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort),
+            seedPort: $seedPort,
+            topologyHash: $topologyHash,
+            clusterDown: $clusterDown,
+            broadlyHealthy: !$clusterDown && $allPrimariesReachable,
+            nodeStateByPort: $nodeStateByPort,
+            primaryStateByPort: $primaryStateByPort,
+            replicaStateByPort: $replicaStateByPort,
+            degradedPrimaryPorts: $degradedPrimaryPorts,
+        );
+    }
+
+    private function selectChaosCandidate(
+        ChaosClusterView $view,
+        ChaosRuntimeState $runtime,
+        ChaosOptions $chaos,
+    ): ?ChaosCandidateEvent {
+        $candidates = [];
+
+        if (in_array(ChaosOptions::CATEGORY_REPLICA_RESTART, $chaos->categories, true)) {
+            foreach ($view->replicaStateByPort as $replicaPort => $replica) {
+                if ($replica->reachable || !$replica->managed) {
+                    continue;
+                }
+
+                $primaryPort = $replica->primaryPort ?? $runtime->lastKnownPrimaryForReplica($replicaPort);
+                $primary = $primaryPort !== null ? ($view->primaryStateByPort[$primaryPort] ?? null) : null;
+                if (!$primary instanceof ChaosPrimaryState || !$primary->reachable) {
+                    continue;
+                }
+
+                $score = 3;
+                $reasons = ['managed replica is down and its primary is still reachable'];
+                if (in_array($replicaPort, $runtime->intentionallyDownReplicaPorts(), true)) {
+                    $score += 4;
+                    $reasons[] = 'repairs an earlier intentional kill';
+                }
+
+                if ($runtime->lastEventTargeted(ChaosOptions::CATEGORY_REPLICA_RESTART, $replicaPort)) {
+                    $score -= 3;
+                }
+
+                $candidates[] = new ChaosCandidateEvent(
+                    category: ChaosOptions::CATEGORY_REPLICA_RESTART,
+                    targetPort: $replicaPort,
+                    targetPrimaryPort: $primaryPort,
+                    score: $score,
+                    summary: sprintf('replica-restart target=%d primary=%d', $replicaPort, $primaryPort),
+                    postcondition: sprintf('replica %d is reachable again as a replica of %d', $replicaPort, $primaryPort),
+                    reasons: $reasons,
+                );
+            }
+        }
+
+        if (in_array(ChaosOptions::CATEGORY_REPLICA_ADD, $chaos->categories, true)) {
+            foreach ($view->primaryStateByPort as $primaryPort => $primary) {
+                if (!$primary->reachable || !$primary->ownsSlots() || $primary->syncingReplicaCount > 0) {
+                    continue;
+                }
+
+                if (count($primary->replicaPorts) >= self::CHAOS_PRIMARY_REPLICA_CAP) {
+                    continue;
+                }
+
+                $replicaPort = $this->selectChaosReplicaPort($view);
+                if ($replicaPort === null) {
+                    continue;
+                }
+
+                $score = 1;
+                $reasons = ['primary has capacity for one more managed replica'];
+                if ($primary->isDegraded()) {
+                    $score += 3;
+                    $reasons[] = 'repairs a degraded primary with zero healthy replicas';
+                } elseif ($primary->healthyReplicaCount < self::CHAOS_PRIMARY_REPLICA_CAP) {
+                    $score += 2;
+                    $reasons[] = 'balances replica inventory toward a lower-redundancy primary';
+                }
+
+                $latestKill = $runtime->mostRecentMatching(ChaosOptions::CATEGORY_REPLICA_KILL);
+                if ($latestKill instanceof ChaosEventRecord && $latestKill->targetPrimaryPort === $primaryPort) {
+                    $score += 2;
+                    $reasons[] = 'follows up on a recent replica loss on this primary';
+                }
+
+                $candidates[] = new ChaosCandidateEvent(
+                    category: ChaosOptions::CATEGORY_REPLICA_ADD,
+                    targetPort: $replicaPort,
+                    targetPrimaryPort: $primaryPort,
+                    score: $score,
+                    summary: sprintf('replica-add target=%d primary=%d', $replicaPort, $primaryPort),
+                    postcondition: sprintf('new replica %d is attached to primary %d', $replicaPort, $primaryPort),
+                    reasons: $reasons,
+                );
+            }
+        }
+
+        if (in_array(ChaosOptions::CATEGORY_REPLICA_KILL, $chaos->categories, true)) {
+            foreach ($view->replicaStateByPort as $replicaPort => $replica) {
+                if (!$replica->reachable || $replica->isFailed || $replica->isSyncing || !$replica->managed) {
+                    continue;
+                }
+
+                $primaryPort = $replica->primaryPort;
+                $primary = $primaryPort !== null ? ($view->primaryStateByPort[$primaryPort] ?? null) : null;
+                if (!$primary instanceof ChaosPrimaryState || !$primary->reachable || $primary->syncingReplicaCount > 0) {
+                    continue;
+                }
+
+                $score = 2;
+                $reasons = ['healthy managed replica on a reachable primary'];
+                if ($primary->healthyReplicaCount >= 2) {
+                    $reasons[] = 'primary keeps at least one healthy replica after the kill';
+                } elseif ($primary->healthyReplicaCount === 1) {
+                    if (!$chaos->unsafe && count($view->degradedPrimaryPorts) > 0) {
+                        continue;
+                    }
+
+                    $score -= 1;
+                    $reasons[] = 'creates one degraded primary, which is allowed in normal v1 mode';
+                } else {
+                    continue;
+                }
+
+                if ($runtime->lastEventTargeted(ChaosOptions::CATEGORY_REPLICA_KILL, $replicaPort)) {
+                    $score -= 3;
+                }
+
+                $candidates[] = new ChaosCandidateEvent(
+                    category: ChaosOptions::CATEGORY_REPLICA_KILL,
+                    targetPort: $replicaPort,
+                    targetPrimaryPort: $primaryPort,
+                    score: $score,
+                    summary: sprintf('replica-kill target=%d primary=%d', $replicaPort, $primaryPort),
+                    postcondition: sprintf('replica %d is unreachable or failed while primary %d remains healthy', $replicaPort, $primaryPort),
+                    reasons: $reasons,
+                );
+            }
+        }
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        usort($candidates, static fn (ChaosCandidateEvent $left, ChaosCandidateEvent $right): int => $right->score <=> $left->score);
+        $topScore = $candidates[0]->score;
+        $topCandidates = array_values(array_filter(
+            $candidates,
+            static fn (ChaosCandidateEvent $candidate): bool => $candidate->score >= ($topScore - 1),
         ));
+
+        return $topCandidates[mt_rand(0, count($topCandidates) - 1)];
+    }
+
+    /**
+     * @param array<string, mixed> $metadata
+     */
+    private function executeChaosEvent(
+        ChaosEventRecord $event,
+        ChaosClusterView $view,
+        ChaosRuntimeState $runtime,
+        CommandLineOptions $options,
+        array $metadata,
+        bool $tls,
+        ?string $caCert,
+    ): void {
+        switch ($event->category) {
+            case ChaosOptions::CATEGORY_REPLICA_KILL:
+                if ($event->targetPort === null) {
+                    throw new RuntimeException('replica-kill is missing a target port.');
+                }
+
+                $this->output->step(sprintf('Stopping replica %d', $event->targetPort));
+                $this->redisNodeClient->shutdown($event->targetPort, $tls, $caCert);
+                $this->systemInspector->waitForPortsToClose([$event->targetPort]);
+                break;
+
+            case ChaosOptions::CATEGORY_REPLICA_RESTART:
+                if ($event->targetPort === null) {
+                    throw new RuntimeException('replica-restart is missing a target port.');
+                }
+
+                $this->restartReplicaPort($event->targetPort, $metadata, $options, $tls, $caCert);
+                break;
+
+            case ChaosOptions::CATEGORY_REPLICA_ADD:
+                if ($event->targetPrimaryPort === null || $event->targetPort === null) {
+                    throw new RuntimeException('replica-add is missing a target primary or target port.');
+                }
+
+                $rawShards = $this->readClusterShardsWithFallback($view->seedPort, $tls, $caCert);
+                $shards = $this->clusterShardsParser->parse($rawShards);
+                $primaryNode = $this->findPrimaryNodeByPort($shards, $event->targetPrimaryPort);
+                if (!$primaryNode instanceof ClusterNodeStatus) {
+                    throw new RuntimeException(sprintf('Unable to resolve primary %d for replica-add.', $event->targetPrimaryPort));
+                }
+
+                [, , $tlsMaterial] = $this->resolveSeedConnectionContext($view->seedPort, $metadata);
+                $this->createReplicaForPrimary(
+                    options: $options,
+                    metadata: $metadata,
+                    seedPort: $view->seedPort,
+                    primaryNode: $primaryNode,
+                    tls: $tls,
+                    caCert: $caCert,
+                    tlsMaterial: $tlsMaterial,
+                    rawShards: $shards,
+                    replicaPort: $event->targetPort,
+                );
+                $runtime->rememberReplicaPrimary($event->targetPort, $event->targetPrimaryPort);
+                break;
+
+            default:
+                throw new RuntimeException(sprintf('Unsupported chaos event category: %s', $event->category));
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $metadata
+     */
+    private function waitForChaosEventConvergence(
+        ChaosEventRecord $event,
+        ChaosRuntimeState $runtime,
+        array $metadata,
+        int $seedPort,
+        bool $tls,
+        ?string $caCert,
+        ChaosOptions $chaos,
+    ): ChaosEventRecord {
+        $deadline = microtime(true) + $chaos->waitTimeoutSeconds;
+        $stablePolls = 0;
+        $lastTopologyHash = null;
+
+        while (microtime(true) < $deadline) {
+            $view = $this->discoverChaosClusterView($runtime, $metadata, $seedPort, $tls, $caCert);
+            $postconditionSatisfied = $this->isChaosEventPostconditionSatisfied($event, $view);
+
+            if ($chaos->watch) {
+                $this->emitChaosWatchLine($chaos, $this->formatChaosWaitLine($event, $view));
+            }
+
+            if ($postconditionSatisfied) {
+                if ($lastTopologyHash === $view->topologyHash) {
+                    $stablePolls++;
+                } else {
+                    $stablePolls = 1;
+                    $lastTopologyHash = $view->topologyHash;
+                }
+
+                if ($stablePolls >= self::CHAOS_STABLE_POLLS) {
+                    $runtime->lastStableTopologyHash = $view->topologyHash;
+
+                    return $event->withStatus('completed', microtime(true));
+                }
+            } else {
+                $stablePolls = 0;
+                $lastTopologyHash = null;
+            }
+
+            sleep(1);
+        }
+
+        throw new RuntimeException(sprintf(
+            'Timed out waiting for %s (%s).',
+            $event->summary,
+            $event->postcondition,
+        ));
+    }
+
+    private function isChaosEventPostconditionSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
+    {
+        return match ($event->category) {
+            ChaosOptions::CATEGORY_REPLICA_KILL => $this->isReplicaKillSatisfied($event, $view),
+            ChaosOptions::CATEGORY_REPLICA_RESTART => $this->isReplicaRestartSatisfied($event, $view),
+            ChaosOptions::CATEGORY_REPLICA_ADD => $this->isReplicaAddSatisfied($event, $view),
+            default => false,
+        };
+    }
+
+    private function isReplicaKillSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
+    {
+        $primaryPort = $event->targetPrimaryPort;
+        $primary = $primaryPort !== null ? ($view->primaryStateByPort[$primaryPort] ?? null) : null;
+        if (!$primary instanceof ChaosPrimaryState || !$primary->reachable || $view->clusterDown) {
+            return false;
+        }
+
+        $target = $event->targetPort !== null ? ($view->nodeStateByPort[$event->targetPort] ?? null) : null;
+        if (!$target instanceof ChaosNodeState) {
+            return $event->targetPort !== null && !$this->systemInspector->isPortListening($event->targetPort);
+        }
+
+        return !$target->reachable || $target->isFailed;
+    }
+
+    private function isReplicaRestartSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
+    {
+        $target = $event->targetPort !== null ? ($view->nodeStateByPort[$event->targetPort] ?? null) : null;
+        if (!$target instanceof ChaosNodeState) {
+            return false;
+        }
+
+        return $target->role === 'replica'
+            && $target->reachable
+            && !$target->isFailed
+            && !$target->isHandshake
+            && $target->primaryPort === $event->targetPrimaryPort;
+    }
+
+    private function isReplicaAddSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
+    {
+        return $this->isReplicaRestartSatisfied($event, $view);
+    }
+
+    private function emitChaosWatchLine(ChaosOptions $chaos, string $message): void
+    {
+        if (!$chaos->watch && !str_starts_with($message, '[chaos]') && !str_starts_with($message, '[plan ]') && !str_starts_with($message, '[done ]')) {
+            return;
+        }
+
+        $this->output->info($message);
+    }
+
+    private function formatChaosWaitLine(ChaosEventRecord $event, ChaosClusterView $view): string
+    {
+        $target = $event->targetPort !== null ? ($view->nodeStateByPort[$event->targetPort] ?? null) : null;
+        $primary = $event->targetPrimaryPort !== null ? ($view->primaryStateByPort[$event->targetPrimaryPort] ?? null) : null;
+        $targetReachable = $target instanceof ChaosNodeState ? ($target->reachable ? '1' : '0') : '0';
+        $targetFailed = $target instanceof ChaosNodeState ? ($target->isFailed ? '1' : '0') : '0';
+        $primaryHealthy = $primary instanceof ChaosPrimaryState ? ($primary->reachable ? '1' : '0') : '0';
+
+        return sprintf(
+            '[wait ] event#%d target=%s reachable=%s failed=%s primary=%s healthy=%s degraded=%s',
+            $event->id,
+            $event->targetPort !== null ? (string) $event->targetPort : '-',
+            $targetReachable,
+            $targetFailed,
+            $event->targetPrimaryPort !== null ? (string) $event->targetPrimaryPort : '-',
+            $primaryHealthy,
+            $view->degradedPrimaryPorts === [] ? '-' : implode(',', array_map('strval', $view->degradedPrimaryPorts)),
+        );
+    }
+
+    private function sleepBetweenChaosSteps(ChaosOptions $chaos): void
+    {
+        if ($chaos->cooldownSeconds > 0) {
+            sleep($chaos->cooldownSeconds);
+        }
+
+        $remainingInterval = max(0, $chaos->intervalSeconds - $chaos->cooldownSeconds);
+        if ($remainingInterval > 0) {
+            sleep($remainingInterval);
+        }
+    }
+
+    /**
+     * @param array<int, ChaosNodeState> $nodeStateByPort
+     * @param array<int, ChaosPrimaryState> $primaryStateByPort
+     */
+    private function buildChaosTopologyHash(array $nodeStateByPort, array $primaryStateByPort, bool $clusterDown): string
+    {
+        $parts = [$clusterDown ? 'down' : 'ok'];
+        foreach ($nodeStateByPort as $port => $node) {
+            $parts[] = implode(':', [
+                (string) $port,
+                $node->role,
+                $node->primaryPort !== null ? (string) $node->primaryPort : '-',
+                $node->reachable ? '1' : '0',
+                $node->isFailed ? '1' : '0',
+                $node->isSyncing ? '1' : '0',
+                implode(',', $node->slotRanges),
+            ]);
+        }
+
+        foreach ($primaryStateByPort as $port => $primary) {
+            $parts[] = implode(':', [
+                'p',
+                (string) $port,
+                (string) $primary->healthyReplicaCount,
+                (string) $primary->syncingReplicaCount,
+                (string) $primary->failedReplicaCount,
+            ]);
+        }
+
+        return sha1(implode('|', $parts));
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function tryFetchNodeInfo(int $port, bool $tls, ?string $caCert): ?array
+    {
+        try {
+            return $this->redisNodeClient->fetchInfo($port, $tls, $caCert);
+        } catch (\Throwable) {
+            try {
+                return $this->redisNodeClient->fetchInfo($port, !$tls, $caCert);
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+    }
+
+    /**
+     * @param array<string, mixed>|null $info
+     * @param list<string> $slotRanges
+     */
+    private function buildChaosNodeState(
+        int $port,
+        string $nodeId,
+        string $role,
+        ?int $primaryPort,
+        bool $knownByCluster,
+        bool $reachable,
+        string $health,
+        array $slotRanges,
+        bool $managed,
+        ?array $info,
+        ?string $clusterDir,
+    ): ChaosNodeState {
+        $isLoading = $this->readInfoBool($info, 'loading');
+        $linkStatus = $role === 'replica' ? $this->readInfoString($info, 'master_link_status') : '';
+        $isSyncing = $role === 'replica'
+            && (
+                $this->readInfoBool($info, 'master_sync_in_progress')
+                || ($linkStatus !== '' && $linkStatus !== 'up')
+            );
+
+        return new ChaosNodeState(
+            port: $port,
+            nodeId: $nodeId,
+            role: $role,
+            primaryPort: $primaryPort,
+            knownByCluster: $knownByCluster,
+            reachable: $reachable,
+            isFailed: $health === 'fail',
+            isHandshake: false,
+            isLoading: $isLoading,
+            isSyncing: $isSyncing,
+            linkStatus: $linkStatus,
+            slotRanges: $slotRanges,
+            pid: $clusterDir !== null ? $this->readNodePid($clusterDir, $port) : null,
+            managed: $managed,
+            health: $health,
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $metadata
+     * @return list<int>
+     */
+    private function readManagedPorts(array $metadata): array
+    {
+        $ports = $metadata['ports'] ?? [];
+        if (!is_array($ports)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($ports as $port) {
+            if (!is_int($port) && !is_string($port)) {
+                continue;
+            }
+
+            $normalized[] = (int) $port;
+        }
+
+        $normalized = array_values(array_unique($normalized));
+        sort($normalized, SORT_NUMERIC);
+
+        return $normalized;
+    }
+
+    private function selectChaosReplicaPort(ChaosClusterView $view): ?int
+    {
+        $usedPorts = array_map('intval', array_keys($view->nodeStateByPort));
+        if ($usedPorts === []) {
+            return null;
+        }
+
+        return $this->selectReplicaPortOutsideClusterRange($usedPorts);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function readClusterInfoWithFallback(int $seedPort, bool $tls, ?string $caCert): array
+    {
+        try {
+            return $this->redisNodeClient->fetchClusterInfo($seedPort, $tls, $caCert);
+        } catch (\Throwable) {
+            return $this->redisNodeClient->fetchClusterInfo($seedPort, !$tls, $caCert);
+        }
+    }
+
+    /**
+     * @param array<string, mixed>|null $info
+     */
+    private function readInfoString(?array $info, string $key): string
+    {
+        $value = $info[$key] ?? null;
+
+        return is_string($value) ? $value : '';
+    }
+
+    /**
+     * @param array<string, mixed>|null $info
+     */
+    private function readInfoBool(?array $info, string $key): bool
+    {
+        $value = $info[$key] ?? null;
+
+        return match (true) {
+            is_bool($value) => $value,
+            is_int($value) => $value !== 0,
+            is_string($value) => in_array(strtolower($value), ['1', 'yes', 'true'], true),
+            default => false,
+        };
+    }
+
+    private function readNodePid(string $clusterDir, int $port): ?int
+    {
+        $pidPath = sprintf('%s/node-%d/redis.pid', rtrim($clusterDir, '/'), $port);
+        if (!is_file($pidPath)) {
+            return null;
+        }
+
+        $pid = trim((string) file_get_contents($pidPath));
+        if (!preg_match('/^\d+$/', $pid)) {
+            return null;
+        }
+
+        return (int) $pid;
     }
 
     /**
@@ -1382,6 +2226,36 @@ final class ClusterManager
         }
 
         return (int) $port;
+    }
+
+    /**
+     * @param array<string, mixed>|null $metadata
+     */
+    private function persistClusterMetadataPortAddition(?array $metadata, int $port): void
+    {
+        if (!is_array($metadata)) {
+            return;
+        }
+
+        $ports = $metadata['ports'] ?? [];
+        if (!is_array($ports)) {
+            $ports = [];
+        }
+
+        $ports[] = $port;
+        $normalized = [];
+        foreach ($ports as $candidate) {
+            if (!is_int($candidate) && !is_string($candidate)) {
+                continue;
+            }
+
+            $normalized[] = (int) $candidate;
+        }
+
+        $normalized = array_values(array_unique($normalized));
+        sort($normalized, SORT_NUMERIC);
+        $metadata['ports'] = $normalized;
+        $this->stateStore->persistClusterMetadata($metadata);
     }
 
     /**

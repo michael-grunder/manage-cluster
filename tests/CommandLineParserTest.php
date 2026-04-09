@@ -18,6 +18,7 @@ final class CommandLineParserTest extends TestCase
         self::assertStringContainsString('Commands:', $usage);
         self::assertStringContainsString('start', $usage);
         self::assertStringContainsString('list', $usage);
+        self::assertStringContainsString('chaos', $usage);
         self::assertStringContainsString('help', $usage);
     }
 
@@ -38,6 +39,15 @@ final class CommandLineParserTest extends TestCase
         self::assertStringContainsString('--pin-primary PORT', $usage);
         self::assertStringContainsString('bin/manage-cluster fill --size 1g', $usage);
         self::assertStringContainsString('bin/manage-cluster fill 7000 --size 512m --pin-primary 7003', $usage);
+    }
+
+    public function testContextualUsageForChaosIncludesExamples(): void
+    {
+        $usage = CommandLineParser::contextualUsage('chaos');
+
+        self::assertStringContainsString('bin/manage-cluster chaos SEED_PORT', $usage);
+        self::assertStringContainsString('--categories LIST', $usage);
+        self::assertStringContainsString('bin/manage-cluster chaos 7000 --dry-run', $usage);
     }
 
     public function testInferRequestedActionFindsPositionalAction(): void
@@ -133,7 +143,7 @@ final class CommandLineParserTest extends TestCase
         $parser = new CommandLineParser();
 
         $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('--watch can only be used with status.');
+        $this->expectExceptionMessage('--watch can only be used with status or chaos.');
 
         $parser->parse(['bin/manage-cluster', 'flush', '7000', '--watch']);
     }
@@ -277,6 +287,60 @@ final class CommandLineParserTest extends TestCase
         self::assertSame([7000], $options->ports);
     }
 
+    public function testParsesChaosWithDefaults(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'chaos', '7000']);
+
+        self::assertSame('chaos', $options->action);
+        self::assertSame([7000], $options->ports);
+        self::assertNotNull($options->chaos);
+        self::assertSame(['replica-kill', 'replica-restart', 'replica-add'], $options->chaos->categories);
+        self::assertSame(8, $options->chaos->intervalSeconds);
+        self::assertFalse($options->chaos->dryRun);
+    }
+
+    public function testParsesChaosWithExplicitOptions(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse([
+            'bin/manage-cluster',
+            '--chaos',
+            '7000',
+            '--categories',
+            'replica-kill,replica-restart',
+            '--interval',
+            '5',
+            '--max-events',
+            '10',
+            '--max-failures',
+            '3',
+            '--dry-run',
+            '--watch',
+            '--seed',
+            '123',
+            '--wait-timeout',
+            '90',
+            '--cooldown',
+            '4',
+            '--unsafe',
+        ]);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame(['replica-kill', 'replica-restart'], $options->chaos->categories);
+        self::assertSame(5, $options->chaos->intervalSeconds);
+        self::assertSame(10, $options->chaos->maxEvents);
+        self::assertSame(3, $options->chaos->maxFailures);
+        self::assertTrue($options->chaos->dryRun);
+        self::assertTrue($options->chaos->watch);
+        self::assertSame(123, $options->chaos->seed);
+        self::assertSame(90, $options->chaos->waitTimeoutSeconds);
+        self::assertSame(4, $options->chaos->cooldownSeconds);
+        self::assertTrue($options->chaos->unsafe);
+    }
+
     public function testParsesStartServerArgsAfterDoubleDash(): void
     {
         $parser = new CommandLineParser();
@@ -366,6 +430,16 @@ final class CommandLineParserTest extends TestCase
         $parser->parse(['bin/manage-cluster', 'restart-replica', '7000', '7001']);
     }
 
+    public function testChaosRequiresExactlyOneSeedPort(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('chaos expects exactly one seed port.');
+
+        $parser->parse(['bin/manage-cluster', 'chaos', '7000', '7001']);
+    }
+
     public function testPortOptionIsRejectedOutsideAddReplica(): void
     {
         $parser = new CommandLineParser();
@@ -374,5 +448,25 @@ final class CommandLineParserTest extends TestCase
         $this->expectExceptionMessage('--port can only be used with add-replica.');
 
         $parser->parse(['bin/manage-cluster', 'status', '7000', '--port', '7010']);
+    }
+
+    public function testCategoriesOptionIsRejectedOutsideChaos(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--categories can only be used with chaos.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--categories', 'replica-kill']);
+    }
+
+    public function testChaosRejectsUnknownCategory(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unsupported chaos category: bogus');
+
+        $parser->parse(['bin/manage-cluster', 'chaos', '7000', '--categories', 'bogus']);
     }
 }

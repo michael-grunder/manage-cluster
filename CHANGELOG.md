@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 ### Added
+- Added `chaos`/`--chaos` action for serialized, stateful replica churn, with
+  conservative v1 support for `replica-kill`, `replica-restart`, and
+  `replica-add`, plus watch/dry-run/event-budget controls.
+- Added explicit chaos runtime DTOs for cluster snapshots, node/primary state,
+  candidate events, and in-memory event history used to plan follow-up actions
+  safely.
 - Added `list` action to show managed clusters that still appear to be running, including concise seed and port-range summaries from the saved state index.
 - Added `restart-replica`/`--restart-replica` action with an interactive filtered tree view that shows only primaries with failed replicas and restarts the selected failed replica from its existing node config.
 - Added `kill`/`--kill` action with an interactive cluster tree view for selecting and shutting down a single primary or replica from any seed node.
@@ -35,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `start` support for passing arbitrary raw `redis-server`/`valkey-server` arguments after `--`, applying them to each started node.
 
 ### Changed
+- Updated the CLI parser, help text, and README command reference to include the
+  new `chaos` command and document its current v1 safety limits.
 - Updated PHAR build documentation to use `composer build-phar` as the supported build entry point instead of `make build-phar`.
 - Updated dependency management to track `composer.lock`, making CI and release PHAR builds reproducible instead of resolving floating package versions on each run.
 - Updated cluster node columns in `status` views and interactive selectors to collapse loopback-only host:port values down to just the port when every discovered node is local.

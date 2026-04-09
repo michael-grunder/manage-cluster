@@ -11,7 +11,7 @@ final class CommandLineParser
     /**
      * @var list<string>
      */
-    private const array ACTIONS = ['start', 'stop', 'kill', 'rebalance', 'status', 'list', 'flush', 'fill', 'add-replica', 'restart-replica'];
+    private const array ACTIONS = ['start', 'stop', 'kill', 'rebalance', 'status', 'list', 'flush', 'fill', 'add-replica', 'restart-replica', 'chaos'];
 
     /**
      * @var array<string, string>
@@ -27,6 +27,7 @@ final class CommandLineParser
         'fill' => 'Fill a cluster until its primaries reach a target size',
         'add-replica' => 'Add a new replica to a selected primary',
         'restart-replica' => 'Restart one failed replica from cluster metadata',
+        'chaos' => 'Run serialized replica-focused cluster churn for client testing',
     ];
 
     /**
@@ -89,6 +90,20 @@ final class CommandLineParser
         'restart-replica' => [
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
+        'chaos' => [
+            ['--categories LIST', 'Allowed events: replica-kill,replica-restart,replica-remove,replica-add,slot-migration'],
+            ['--interval SECONDS', 'Minimum time between completed chaos steps (default: 8)'],
+            ['--max-events N', 'Stop after N completed events (default: unlimited)'],
+            ['--max-failures N', 'Abort after N consecutive failures (default: 5)'],
+            ['--dry-run', 'Select and print events without mutating cluster state'],
+            ['--watch', 'Print compact state and wait-loop progress'],
+            ['--seed N', 'PRNG seed for reproducible event selection'],
+            ['--wait-timeout SECONDS', 'Maximum wait for event convergence (default: 60)'],
+            ['--cooldown SECONDS', 'Quiet period after convergence (default: 2)'],
+            ['--allow-slot-migration', 'Allow slot-migration selection when implemented'],
+            ['--unsafe', 'Permit lower-redundancy actions normally avoided'],
+            ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
+        ],
     ];
 
     /**
@@ -138,6 +153,13 @@ final class CommandLineParser
         'restart-replica' => [
             'bin/manage-cluster restart-replica 7000',
         ],
+        'chaos' => [
+            'bin/manage-cluster chaos 7000',
+            'bin/manage-cluster chaos 7000 --categories replica-kill,replica-restart',
+            'bin/manage-cluster chaos 7000 --max-events 50',
+            'bin/manage-cluster chaos 7000 --interval 8 --watch',
+            'bin/manage-cluster chaos 7000 --dry-run',
+        ],
     ];
 
     /**
@@ -160,6 +182,11 @@ final class CommandLineParser
         ],
         'restart-replica' => [
             'The CLI only offers failed replicas that can be recovered from saved metadata.',
+        ],
+        'chaos' => [
+            'v1 focuses on serialized replica churn: kill, restart, and add.',
+            'When --dry-run is used without --max-events, the command prints one planned event and exits.',
+            'slot-migration and replica-remove are parsed but remain disabled in conservative v1 selection.',
         ],
     ];
 
@@ -195,10 +222,21 @@ final class CommandLineParser
         $memberSize = self::DEFAULT_FILL_MEMBER_SIZE;
         $fillKeys = self::DEFAULT_FILL_TARGET_KEYS;
         $pinPrimaryPort = null;
+        $chaosCategories = ChaosOptions::DEFAULT_CATEGORIES;
+        $chaosInterval = 8;
+        $chaosMaxEvents = null;
+        $chaosMaxFailures = 5;
+        $chaosDryRun = false;
+        $chaosSeed = null;
+        $chaosWaitTimeout = 60;
+        $chaosCooldown = 2;
+        $chaosAllowSlotMigration = false;
+        $chaosUnsafe = false;
         $typesProvided = false;
         $membersProvided = false;
         $memberSizeProvided = false;
         $fillKeysProvided = false;
+        $chaosCategoriesProvided = false;
 
         for ($i = 1; $i < count($argv); $i++) {
             $arg = $argv[$i];
@@ -223,8 +261,9 @@ final class CommandLineParser
                 case '--fill':
                 case '--add-replica':
                 case '--restart-replica':
+                case '--chaos':
                     if ($action !== null) {
-                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --kill, --rebalance, --status, --list, --flush, --fill, --add-replica, or --restart-replica.');
+                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --kill, --rebalance, --status, --list, --flush, --fill, --add-replica, --restart-replica, or --chaos.');
                     }
 
                     $action = ltrim($arg, '-');
@@ -270,6 +309,47 @@ final class CommandLineParser
                     $watch = true;
                     break;
 
+                case '--categories':
+                    $chaosCategories = $this->parseChaosCategories($this->parseStringOption($argv, ++$i, '--categories'));
+                    $chaosCategoriesProvided = true;
+                    break;
+
+                case '--interval':
+                    $chaosInterval = $this->parseIntOption($argv, ++$i, '--interval');
+                    break;
+
+                case '--max-events':
+                    $chaosMaxEvents = $this->parseIntOption($argv, ++$i, '--max-events');
+                    break;
+
+                case '--max-failures':
+                    $chaosMaxFailures = $this->parseIntOption($argv, ++$i, '--max-failures');
+                    break;
+
+                case '--dry-run':
+                    $chaosDryRun = true;
+                    break;
+
+                case '--seed':
+                    $chaosSeed = $this->parseIntOption($argv, ++$i, '--seed');
+                    break;
+
+                case '--wait-timeout':
+                    $chaosWaitTimeout = $this->parseIntOption($argv, ++$i, '--wait-timeout');
+                    break;
+
+                case '--cooldown':
+                    $chaosCooldown = $this->parseIntOption($argv, ++$i, '--cooldown');
+                    break;
+
+                case '--allow-slot-migration':
+                    $chaosAllowSlotMigration = true;
+                    break;
+
+                case '--unsafe':
+                    $chaosUnsafe = true;
+                    break;
+
                 case '--size':
                     $size = $this->parseStringOption($argv, ++$i, '--size');
                     break;
@@ -313,7 +393,7 @@ final class CommandLineParser
                             break;
                         }
 
-                        throw new InvalidArgumentException(sprintf('Specify start/stop/kill/rebalance/status/list/flush/fill/add-replica/restart-replica (or --start/--stop/--kill/--rebalance/--status/--list/--flush/--fill/--add-replica/--restart-replica) before ports (got: %s).', $arg));
+                        throw new InvalidArgumentException(sprintf('Specify start/stop/kill/rebalance/status/list/flush/fill/add-replica/restart-replica/chaos (or --start/--stop/--kill/--rebalance/--status/--list/--flush/--fill/--add-replica/--restart-replica/--chaos) before ports (got: %s).', $arg));
                     }
 
                     $portTokens[] = $arg;
@@ -322,7 +402,7 @@ final class CommandLineParser
         }
 
         if ($action === null) {
-            throw new InvalidArgumentException('Missing action: use start/stop/kill/rebalance/status/list/flush/fill/add-replica/restart-replica (or --start/--stop/--kill/--rebalance/--status/--list/--flush/--fill/--add-replica/--restart-replica).');
+            throw new InvalidArgumentException('Missing action: use start/stop/kill/rebalance/status/list/flush/fill/add-replica/restart-replica/chaos (or --start/--stop/--kill/--rebalance/--status/--list/--flush/--fill/--add-replica/--restart-replica/--chaos).');
         }
 
         if ($action === 'start' && $replicas < 0) {
@@ -337,8 +417,8 @@ final class CommandLineParser
             throw new InvalidArgumentException('--tls-rsa-bits must be >= 1024.');
         }
 
-        if ($watch && $action !== 'status') {
-            throw new InvalidArgumentException('--watch can only be used with status.');
+        if ($watch && !in_array($action, ['status', 'chaos'], true)) {
+            throw new InvalidArgumentException('--watch can only be used with status or chaos.');
         }
 
         if ($startServerArgs !== [] && $action !== 'start') {
@@ -389,6 +469,46 @@ final class CommandLineParser
             throw new InvalidArgumentException('--pin-primary can only be used with fill.');
         }
 
+        if ($action !== 'chaos' && $chaosCategoriesProvided) {
+            throw new InvalidArgumentException('--categories can only be used with chaos.');
+        }
+
+        if ($action !== 'chaos' && $chaosInterval !== 8) {
+            throw new InvalidArgumentException('--interval can only be used with chaos.');
+        }
+
+        if ($action !== 'chaos' && $chaosMaxEvents !== null) {
+            throw new InvalidArgumentException('--max-events can only be used with chaos.');
+        }
+
+        if ($action !== 'chaos' && $chaosMaxFailures !== 5) {
+            throw new InvalidArgumentException('--max-failures can only be used with chaos.');
+        }
+
+        if ($action !== 'chaos' && $chaosDryRun) {
+            throw new InvalidArgumentException('--dry-run can only be used with chaos.');
+        }
+
+        if ($action !== 'chaos' && $chaosSeed !== null) {
+            throw new InvalidArgumentException('--seed can only be used with chaos.');
+        }
+
+        if ($action !== 'chaos' && $chaosWaitTimeout !== 60) {
+            throw new InvalidArgumentException('--wait-timeout can only be used with chaos.');
+        }
+
+        if ($action !== 'chaos' && $chaosCooldown !== 2) {
+            throw new InvalidArgumentException('--cooldown can only be used with chaos.');
+        }
+
+        if ($action !== 'chaos' && $chaosAllowSlotMigration) {
+            throw new InvalidArgumentException('--allow-slot-migration can only be used with chaos.');
+        }
+
+        if ($action !== 'chaos' && $chaosUnsafe) {
+            throw new InvalidArgumentException('--unsafe can only be used with chaos.');
+        }
+
         if ($action !== 'add-replica' && $replicaPort !== null) {
             throw new InvalidArgumentException('--port can only be used with add-replica.');
         }
@@ -433,6 +553,10 @@ final class CommandLineParser
             throw new InvalidArgumentException('restart-replica expects exactly one seed port.');
         }
 
+        if ($action === 'chaos' && count($ports) !== 1) {
+            throw new InvalidArgumentException('chaos expects exactly one seed port.');
+        }
+
         $fillOptions = null;
         if ($action === 'fill') {
             if ($size === null || trim($size) === '') {
@@ -453,6 +577,43 @@ final class CommandLineParser
             );
         }
 
+        if ($chaosInterval <= 0) {
+            throw new InvalidArgumentException('--interval must be > 0.');
+        }
+
+        if ($chaosMaxEvents !== null && $chaosMaxEvents <= 0) {
+            throw new InvalidArgumentException('--max-events must be > 0.');
+        }
+
+        if ($chaosMaxFailures <= 0) {
+            throw new InvalidArgumentException('--max-failures must be > 0.');
+        }
+
+        if ($chaosWaitTimeout <= 0) {
+            throw new InvalidArgumentException('--wait-timeout must be > 0.');
+        }
+
+        if ($chaosCooldown < 0) {
+            throw new InvalidArgumentException('--cooldown must be >= 0.');
+        }
+
+        $chaosOptions = null;
+        if ($action === 'chaos') {
+            $chaosOptions = new ChaosOptions(
+                categories: $chaosCategories,
+                intervalSeconds: $chaosInterval,
+                maxEvents: $chaosMaxEvents,
+                maxFailures: $chaosMaxFailures,
+                dryRun: $chaosDryRun,
+                watch: $watch,
+                seed: $chaosSeed,
+                waitTimeoutSeconds: $chaosWaitTimeout,
+                cooldownSeconds: $chaosCooldown,
+                allowSlotMigration: $chaosAllowSlotMigration,
+                unsafe: $chaosUnsafe,
+            );
+        }
+
         return new CommandLineOptions(
             action: $action,
             ports: $ports,
@@ -468,6 +629,7 @@ final class CommandLineParser
             stateDir: $stateDir,
             watch: $watch,
             fill: $fillOptions,
+            chaos: $chaosOptions,
             startServerArgs: $startServerArgs,
         );
     }
@@ -566,6 +728,13 @@ final class CommandLineParser
             '--keys' => true,
             '--pin-primary' => true,
             '--port' => true,
+            '--categories' => true,
+            '--interval' => true,
+            '--max-events' => true,
+            '--max-failures' => true,
+            '--seed' => true,
+            '--wait-timeout' => true,
+            '--cooldown' => true,
         ];
 
         for ($i = 1; $i < count($argv); $i++) {
@@ -763,8 +932,28 @@ final class CommandLineParser
             'fill' => 'bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]',
             'add-replica' => 'bin/manage-cluster add-replica SEED_PORT [--port PORT]',
             'restart-replica' => 'bin/manage-cluster restart-replica SEED_PORT',
+            'chaos' => 'bin/manage-cluster chaos SEED_PORT [--categories LIST] [--interval SECONDS] [--max-events N] [--dry-run] [--watch]',
             default => 'bin/manage-cluster [OPTIONS] <COMMAND> [ARGS]',
         };
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function parseChaosCategories(string $value): array
+    {
+        $categories = array_values(array_filter(array_map('trim', explode(',', strtolower($value))), static fn (string $category): bool => $category !== ''));
+        if ($categories === []) {
+            throw new InvalidArgumentException('--categories must contain at least one event category.');
+        }
+
+        foreach ($categories as $category) {
+            if (!in_array($category, ChaosOptions::SUPPORTED_CATEGORIES, true)) {
+                throw new InvalidArgumentException(sprintf('Unsupported chaos category: %s', $category));
+            }
+        }
+
+        return array_values(array_unique($categories));
     }
 
     private static function formatHeading(string $text, bool $interactive): string

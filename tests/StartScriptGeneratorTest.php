@@ -30,6 +30,7 @@ final class StartScriptGeneratorTest extends TestCase
             stateDir: '/tmp/manage-cluster',
             watch: false,
             fill: null,
+            chaos: null,
             startServerArgs: ['--save', '', '--enable-debug-command', 'local'],
         ));
 
@@ -67,6 +68,7 @@ final class StartScriptGeneratorTest extends TestCase
             stateDir: '/tmp/manage-cluster',
             watch: false,
             fill: null,
+            chaos: null,
             startServerArgs: [],
         ));
     }
