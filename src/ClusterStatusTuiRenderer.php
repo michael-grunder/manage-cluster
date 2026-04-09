@@ -8,8 +8,6 @@ use PhpTui\Tui\Display\Display;
 use PhpTui\Tui\DisplayBuilder;
 use PhpTui\Tui\Extension\Core\Widget\Block\Padding;
 use PhpTui\Tui\Extension\Core\Widget\BlockWidget;
-use PhpTui\Tui\Extension\Core\Widget\GridWidget;
-use PhpTui\Tui\Extension\Core\Widget\ParagraphWidget;
 use PhpTui\Tui\Extension\Core\Widget\Table\TableRow;
 use PhpTui\Tui\Extension\Core\Widget\TableWidget;
 use PhpTui\Tui\Layout\Constraint;
@@ -18,7 +16,6 @@ use PhpTui\Tui\Style\Style;
 use PhpTui\Tui\Text\Title;
 use PhpTui\Tui\Widget\Borders;
 use PhpTui\Tui\Widget\BorderType;
-use PhpTui\Tui\Widget\Direction;
 use PhpTui\Tui\Widget\HorizontalAlignment;
 use Throwable;
 
@@ -64,7 +61,7 @@ final class ClusterStatusTuiRenderer
                 $this->fullscreenMode = $fullscreenMode;
             }
 
-            $this->display->draw($this->buildRootWidget($shards, $seedPort, $watchMode));
+            $this->display->draw($this->buildRootWidget($shards, $watchMode));
         } catch (Throwable) {
             $this->display = null;
             $this->viewportHeight = null;
@@ -95,21 +92,15 @@ final class ClusterStatusTuiRenderer
             $rows += 1 + count($shard->replicas);
         }
 
-        // Block border/title + padding + 3 metadata lines + spacer + table rows.
-        return max(10, 7 + $rows);
+        // Block border/title + padding + table rows.
+        return max(7, 5 + $rows);
     }
 
     /**
      * @param list<ClusterShardStatus> $shards
      */
-    private function buildRootWidget(array $shards, int $seedPort, bool $watchMode): BlockWidget
+    private function buildRootWidget(array $shards, bool $watchMode): BlockWidget
     {
-        $metadata = ParagraphWidget::fromString(implode("\n", [
-            sprintf('Updated: %s', date('Y-m-d H:i:s')),
-            sprintf('Seed: 127.0.0.1:%d', $seedPort),
-            $watchMode ? 'Mode: live watch' : 'Mode: snapshot',
-        ]));
-
         $table = TableWidget::default()
             ->header($this->buildTableHeader())
             ->rows(...$this->buildTableRows($shards))
@@ -122,29 +113,17 @@ final class ClusterStatusTuiRenderer
                 Constraint::min(8),
             );
 
-        $content = GridWidget::default()
-            ->direction(Direction::Vertical)
-            ->constraints(
-                Constraint::length(3),
-                Constraint::length(1),
-                Constraint::min(1),
-            )
-            ->widgets(
-                $metadata,
-                ParagraphWidget::fromString(''),
-                $table,
-            );
-
-        $title = Title::fromString(sprintf(' Cluster Status%s ', $watchMode ? ' [watch]' : ''))
-            ->horizontalAlignment(HorizontalAlignment::Center);
+        $title = Title::fromString(sprintf(' Cluster Status%s ', $watchMode ? ' [watch]' : ''));
+        $clock = Title::fromString(sprintf(' %s ', date('H:i:s')))
+            ->horizontalAlignment(HorizontalAlignment::Right);
 
         return BlockWidget::default()
             ->borders(Borders::ALL)
             ->borderType(BorderType::Plain)
             ->padding(Padding::fromScalars(left: 1, right: 1, top: 1, bottom: 1))
             ->titleStyle(Style::default()->addModifier(Modifier::BOLD))
-            ->titles($title)
-            ->widget($content);
+            ->titles($title, $clock)
+            ->widget($table);
     }
 
     private function buildTableHeader(): TableRow
