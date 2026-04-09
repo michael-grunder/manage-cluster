@@ -64,10 +64,6 @@ final class ClusterStatusTuiRenderer
                 $this->fullscreenMode = $fullscreenMode;
             }
 
-            if ($fullscreenMode) {
-                $this->display->clear();
-            }
-
             $this->display->draw($this->buildRootWidget($shards, $seedPort, $watchMode));
         } catch (Throwable) {
             $this->display = null;

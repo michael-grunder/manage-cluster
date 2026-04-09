@@ -158,7 +158,7 @@ Behavior notes:
 - Uses a `php-tui` table when stdout is a TTY
 - Falls back to plain text for non-interactive output
 - Shows per-node used memory; unreachable nodes render `-`
-- `--watch` refreshes once per second in a fullscreen boxed TUI and repaints the frame each tick
+- `--watch` refreshes once per second in a fullscreen boxed TUI and relies on incremental redraws to avoid full-frame flashing
 
 ### `list`
 
