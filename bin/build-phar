@@ -285,17 +285,17 @@ function addRuntimeComposerFiles(\Phar $phar, string $projectRoot, array $instal
     $allowedPackagePrefixes['vendor/composer/'] = true;
 
     $autoloadFiles = filterAutoloadPaths(
-        require sprintf('%s/vendor/composer/autoload_files.php', $projectRoot),
+        requireComposerArrayFile($projectRoot, 'autoload_files.php', []),
         $allowedPackagePrefixes,
         $projectRoot,
     );
     $autoloadPsr4 = filterAutoloadPathLists(
-        require sprintf('%s/vendor/composer/autoload_psr4.php', $projectRoot),
+        requireComposerArrayFile($projectRoot, 'autoload_psr4.php'),
         $allowedPackagePrefixes,
         $projectRoot,
     );
     $autoloadClassmap = filterAutoloadPaths(
-        require sprintf('%s/vendor/composer/autoload_classmap.php', $projectRoot),
+        requireComposerArrayFile($projectRoot, 'autoload_classmap.php'),
         $allowedPackagePrefixes,
         $projectRoot,
     );
@@ -426,6 +426,29 @@ function isRuntimeVendorFile(string $absolutePath, string $relativePath): bool
     }
 
     return false;
+}
+
+/**
+ * @param array<mixed>|null $default
+ * @return array<mixed>
+ */
+function requireComposerArrayFile(string $projectRoot, string $fileName, ?array $default = null): array
+{
+    $path = sprintf('%s/vendor/composer/%s', $projectRoot, $fileName);
+    if (!is_file($path)) {
+        if ($default !== null) {
+            return $default;
+        }
+
+        throw new \RuntimeException(sprintf('Required Composer metadata file does not exist: %s', $path));
+    }
+
+    $data = require $path;
+    if (!is_array($data)) {
+        throw new \RuntimeException(sprintf('Composer metadata file did not return an array: %s', $path));
+    }
+
+    return $data;
 }
 
 /**

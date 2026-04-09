@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `start` support for passing arbitrary raw `redis-server`/`valkey-server` arguments after `--`, applying them to each started node.
 
 ### Changed
+- Updated dependency management to track `composer.lock`, making CI and release PHAR builds reproducible instead of resolving floating package versions on each run.
 - Updated cluster node columns in `status` views and interactive selectors to collapse loopback-only host:port values down to just the port when every discovered node is local.
 - Updated `status` so `bin/manage-cluster status` with no seed port now summarizes all managed clusters discovered in the configured state directory, including `--watch` refreshes for that overview.
 - Updated `status`/`--watch` output to drop the redundant `Role` column by default and show per-node used memory, with `-` for unreachable nodes.
@@ -74,6 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - None.
 
 ### Fixed
+- Fixed `bin/build-phar` so `composer build-phar` works after `composer install --no-dev` even when Composer omits optional metadata files such as `vendor/composer/autoload_files.php`.
 - Added defensive start-time checks for occupied ports and cluster shape validation before node launch.
 - Fixed fullscreen `status --watch` rendering to avoid clearing the entire terminal before every redraw, which caused visible frame flashing.
 - Fixed `--binary`/`--redis-cli` explicit filesystem paths so existing executable files are accepted instead of being rejected by command-name lookup.
