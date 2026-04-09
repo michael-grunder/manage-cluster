@@ -20,7 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added modular PHP implementation under `src/` for CLI parsing, state management, TLS generation, and Redis node orchestration.
 - Added `bin/build-phar` and `composer build-phar` for producing a single executable PHAR binary.
 - Added `bin/build-phar-shim` to run PHAR builds with `phar.readonly=0` using the default PHP binary.
-- Added a `Makefile` with `make build-phar` for the common PHAR build flow.
 - Added positional action parsing so `bin/manage-cluster start|stop|rebalance ...` works alongside the existing `--start|--stop|--rebalance` flags.
 - Added automatic single-port expansion for `start`: when one seed port is provided it now expands to contiguous ports (`4` ports for replicas `0`; otherwise `3 * (replicas + 1)` ports).
 - Added `status`/`--status` action that reads `CLUSTER SHARDS` and prints a compact, terminal-width-aware shard/node overview.
@@ -36,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `start` support for passing arbitrary raw `redis-server`/`valkey-server` arguments after `--`, applying them to each started node.
 
 ### Changed
+- Updated PHAR build documentation to use `composer build-phar` as the supported build entry point instead of `make build-phar`.
 - Updated dependency management to track `composer.lock`, making CI and release PHAR builds reproducible instead of resolving floating package versions on each run.
 - Updated cluster node columns in `status` views and interactive selectors to collapse loopback-only host:port values down to just the port when every discovered node is local.
 - Updated `status` so `bin/manage-cluster status` with no seed port now summarizes all managed clusters discovered in the configured state directory, including `--watch` refreshes for that overview.
@@ -72,7 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - None.
 
 ### Removed
-- None.
+- Removed the redundant `Makefile`; PHAR builds now go through `composer build-phar`.
 
 ### Fixed
 - Fixed `bin/build-phar` so `composer build-phar` works after `composer install --no-dev` even when Composer omits optional metadata files such as `vendor/composer/autoload_files.php`.

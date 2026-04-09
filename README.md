@@ -312,20 +312,13 @@ directory on failure for inspection.
 Build an executable PHAR archive:
 
 ```bash
-bin/build-phar-shim
-```
-
-Equivalent entry points:
-
-```bash
-make build-phar
 composer build-phar
 ```
 
 Custom output path:
 
 ```bash
-make build-phar OUTPUT=dist/custom-name.phar
+composer build-phar -- --output dist/custom-name.phar
 ```
 
 Direct builder usage:
