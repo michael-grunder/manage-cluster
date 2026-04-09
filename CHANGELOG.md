@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Updated `status` so `bin/manage-cluster status` with no seed port now summarizes all managed clusters discovered in the configured state directory, including `--watch` refreshes for that overview.
 - Updated `status`/`--watch` output to drop the redundant `Role` column by default and show per-node used memory, with `-` for unreachable nodes.
+- Updated `status --watch` TUI rendering to use a fullscreen boxed layout with unicode borders and a full-frame repaint on each refresh.
 - Reworked `README.md` into a release-ready guide with installation, quick
   start, command reference, state/TLS notes, PHAR build instructions, and
   development checks ahead of the planned `v0.1.0` release.

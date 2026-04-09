@@ -6,6 +6,8 @@ namespace Mgrunder\CreateCluster;
 
 use PhpTui\Tui\Display\Display;
 use PhpTui\Tui\DisplayBuilder;
+use PhpTui\Tui\Extension\Core\Widget\Block\Padding;
+use PhpTui\Tui\Extension\Core\Widget\BlockWidget;
 use PhpTui\Tui\Extension\Core\Widget\GridWidget;
 use PhpTui\Tui\Extension\Core\Widget\ParagraphWidget;
 use PhpTui\Tui\Extension\Core\Widget\Table\TableRow;
@@ -13,7 +15,11 @@ use PhpTui\Tui\Extension\Core\Widget\TableWidget;
 use PhpTui\Tui\Layout\Constraint;
 use PhpTui\Tui\Style\Modifier;
 use PhpTui\Tui\Style\Style;
+use PhpTui\Tui\Text\Title;
+use PhpTui\Tui\Widget\Borders;
+use PhpTui\Tui\Widget\BorderType;
 use PhpTui\Tui\Widget\Direction;
+use PhpTui\Tui\Widget\HorizontalAlignment;
 use Throwable;
 
 final class ClusterStatusTuiRenderer
@@ -27,6 +33,7 @@ final class ClusterStatusTuiRenderer
 
     private ?Display $display = null;
     private ?int $viewportHeight = null;
+    private ?bool $fullscreenMode = null;
 
     /**
      * @param list<ClusterShardStatus> $shards
@@ -36,20 +43,36 @@ final class ClusterStatusTuiRenderer
         if (!$this->supportsCurrentOutput()) {
             return false;
         }
-
         try {
             $height = $this->calculateViewportHeight($shards);
-            if ($this->display === null || $this->viewportHeight !== $height) {
-                $this->display = DisplayBuilder::default()
-                    ->inline($height)
-                    ->build();
+            $fullscreenMode = $watchMode;
+
+            if (
+                $this->display === null
+                || $this->fullscreenMode !== $fullscreenMode
+                || (!$fullscreenMode && $this->viewportHeight !== $height)
+            ) {
+                $builder = DisplayBuilder::default();
+                if ($fullscreenMode) {
+                    $builder->fullscreen();
+                } else {
+                    $builder->inline($height);
+                }
+
+                $this->display = $builder->build();
                 $this->viewportHeight = $height;
+                $this->fullscreenMode = $fullscreenMode;
+            }
+
+            if ($fullscreenMode) {
+                $this->display->clear();
             }
 
             $this->display->draw($this->buildRootWidget($shards, $seedPort, $watchMode));
         } catch (Throwable) {
             $this->display = null;
             $this->viewportHeight = null;
+            $this->fullscreenMode = null;
 
             return false;
         }
@@ -76,18 +99,19 @@ final class ClusterStatusTuiRenderer
             $rows += 1 + count($shard->replicas);
         }
 
-        // 2 lines metadata, 1 spacer, then table rows + header.
-        return max(6, 3 + $rows);
+        // Block border/title + padding + 3 metadata lines + spacer + table rows.
+        return max(10, 7 + $rows);
     }
 
     /**
      * @param list<ClusterShardStatus> $shards
      */
-    private function buildRootWidget(array $shards, int $seedPort, bool $watchMode): GridWidget
+    private function buildRootWidget(array $shards, int $seedPort, bool $watchMode): BlockWidget
     {
         $metadata = ParagraphWidget::fromString(implode("\n", [
-            sprintf('Cluster status (seed 127.0.0.1:%d)%s', $seedPort, $watchMode ? ' [watch]' : ''),
             sprintf('Updated: %s', date('Y-m-d H:i:s')),
+            sprintf('Seed: 127.0.0.1:%d', $seedPort),
+            $watchMode ? 'Mode: live watch' : 'Mode: snapshot',
         ]));
 
         $table = TableWidget::default()
@@ -102,10 +126,10 @@ final class ClusterStatusTuiRenderer
                 Constraint::min(8),
             );
 
-        return GridWidget::default()
+        $content = GridWidget::default()
             ->direction(Direction::Vertical)
             ->constraints(
-                Constraint::length(2),
+                Constraint::length(3),
                 Constraint::length(1),
                 Constraint::min(1),
             )
@@ -114,6 +138,17 @@ final class ClusterStatusTuiRenderer
                 ParagraphWidget::fromString(''),
                 $table,
             );
+
+        $title = Title::fromString(sprintf(' Cluster Status%s ', $watchMode ? ' [watch]' : ''))
+            ->horizontalAlignment(HorizontalAlignment::Center);
+
+        return BlockWidget::default()
+            ->borders(Borders::ALL)
+            ->borderType(BorderType::Plain)
+            ->padding(Padding::fromScalars(left: 1, right: 1, top: 1, bottom: 1))
+            ->titleStyle(Style::default()->addModifier(Modifier::BOLD))
+            ->titles($title)
+            ->widget($content);
     }
 
     private function buildTableHeader(): TableRow
