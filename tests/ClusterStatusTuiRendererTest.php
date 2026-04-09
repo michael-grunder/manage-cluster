@@ -37,6 +37,17 @@ final class ClusterStatusTuiRendererTest extends TestCase
         self::assertSame(9, $height);
     }
 
+    public function testBuildRootWidgetCollapsesLoopbackHostsToPorts(): void
+    {
+        $renderer = new ClusterStatusTuiRenderer();
+
+        $widget = $this->invokeBuildRootWidget($renderer, $this->sampleShards(), false);
+
+        self::assertInstanceOf(TableWidget::class, $widget->widget);
+        self::assertSame('7000', $widget->widget->rows[0]->cells[0]->content->lines[0]->spans[0]->content);
+        self::assertSame('↳ 7005', $widget->widget->rows[1]->cells[0]->content->lines[0]->spans[0]->content);
+    }
+
     /**
      * @param list<ClusterShardStatus> $shards
      */

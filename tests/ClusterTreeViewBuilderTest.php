@@ -19,14 +19,14 @@ final class ClusterTreeViewBuilderTest extends TestCase
         $entries = $builder->build($this->sampleShards(), ClusterTreeViewMode::AllNodes);
 
         self::assertCount(4, $entries);
-        self::assertSame('127.0.0.1:7000', $entries[0]->node->address());
+        self::assertSame('7000', $entries[0]->nodeLabel());
         self::assertSame(0, $entries[0]->depth);
         self::assertSame('0-5460', $entries[0]->slotRange);
-        self::assertSame('127.0.0.1:7001', $entries[1]->node->address());
+        self::assertSame('  7001', $entries[1]->nodeLabel());
         self::assertSame(1, $entries[1]->depth);
         self::assertNull($entries[1]->slotRange);
-        self::assertSame('127.0.0.1:7003', $entries[2]->node->address());
-        self::assertSame('127.0.0.1:7002', $entries[3]->node->address());
+        self::assertSame('  7003', $entries[2]->nodeLabel());
+        self::assertSame('7002', $entries[3]->nodeLabel());
     }
 
     public function testBuildOmitsReplicasForPrimariesOnlyMode(): void
@@ -36,8 +36,8 @@ final class ClusterTreeViewBuilderTest extends TestCase
         $entries = $builder->build($this->sampleShards(), ClusterTreeViewMode::PrimariesOnly);
 
         self::assertCount(2, $entries);
-        self::assertSame('127.0.0.1:7000', $entries[0]->node->address());
-        self::assertSame('127.0.0.1:7002', $entries[1]->node->address());
+        self::assertSame('7000', $entries[0]->nodeLabel());
+        self::assertSame('7002', $entries[1]->nodeLabel());
         self::assertSame(0, $entries[0]->depth);
         self::assertSame(0, $entries[1]->depth);
     }
@@ -49,10 +49,10 @@ final class ClusterTreeViewBuilderTest extends TestCase
         $entries = $builder->build($this->sampleShards(), ClusterTreeViewMode::FailedReplicasOnly);
 
         self::assertCount(2, $entries);
-        self::assertSame('127.0.0.1:7000', $entries[0]->node->address());
+        self::assertSame('7000', $entries[0]->nodeLabel());
         self::assertFalse($entries[0]->selectable);
         self::assertSame(0, $entries[0]->depth);
-        self::assertSame('127.0.0.1:7003', $entries[1]->node->address());
+        self::assertSame('  7003', $entries[1]->nodeLabel());
         self::assertTrue($entries[1]->selectable);
         self::assertSame(1, $entries[1]->depth);
     }

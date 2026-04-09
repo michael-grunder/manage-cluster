@@ -101,9 +101,10 @@ final class ClusterStatusTuiRenderer
      */
     private function buildRootWidget(array $shards, bool $watchMode): BlockWidget
     {
+        $collapseHosts = ClusterNodeAddressFormatter::shouldCollapseHosts($shards);
         $table = TableWidget::default()
             ->header($this->buildTableHeader())
-            ->rows(...$this->buildTableRows($shards))
+            ->rows(...$this->buildTableRows($shards, $collapseHosts))
             ->widths(
                 Constraint::percentage(34),
                 Constraint::length(self::ID_COLUMN_WIDTH),
@@ -138,7 +139,7 @@ final class ClusterStatusTuiRenderer
      * @param list<ClusterShardStatus> $shards
      * @return list<TableRow>
      */
-    private function buildTableRows(array $shards): array
+    private function buildTableRows(array $shards, bool $collapseHosts): array
     {
         if ($shards === []) {
             return [TableRow::fromStrings('No shard information returned.', '-', '-', '-', '-', '-')];
@@ -146,20 +147,20 @@ final class ClusterStatusTuiRenderer
 
         $rows = [];
         foreach ($shards as $shard) {
-            $rows[] = $this->buildNodeRow($shard->master, $shard->slotRange(), false);
+            $rows[] = $this->buildNodeRow($shard->master, $shard->slotRange(), false, $collapseHosts);
             foreach ($shard->replicas as $replica) {
-                $rows[] = $this->buildNodeRow($replica, '-', true);
+                $rows[] = $this->buildNodeRow($replica, '-', true, $collapseHosts);
             }
         }
 
         return $rows;
     }
 
-    private function buildNodeRow(ClusterNodeStatus $node, string $slots, bool $isReplica): TableRow
+    private function buildNodeRow(ClusterNodeStatus $node, string $slots, bool $isReplica, bool $collapseHosts): TableRow
     {
         $address = $isReplica
-            ? self::REPLICA_PREFIX . $node->address()
-            : $node->address();
+            ? self::REPLICA_PREFIX . $node->displayAddress($collapseHosts)
+            : $node->displayAddress($collapseHosts);
 
         return TableRow::fromStrings(
             $address,

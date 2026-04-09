@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `start` support for passing arbitrary raw `redis-server`/`valkey-server` arguments after `--`, applying them to each started node.
 
 ### Changed
+- Updated cluster node columns in `status` views and interactive selectors to collapse loopback-only host:port values down to just the port when every discovered node is local.
 - Updated `status` so `bin/manage-cluster status` with no seed port now summarizes all managed clusters discovered in the configured state directory, including `--watch` refreshes for that overview.
 - Updated `status`/`--watch` output to drop the redundant `Role` column by default and show per-node used memory, with `-` for unreachable nodes.
 - Updated `status --watch` TUI rendering to use a fullscreen boxed layout with unicode borders and a full-frame repaint on each refresh.

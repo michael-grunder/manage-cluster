@@ -11,6 +11,7 @@ final readonly class ClusterTreeViewEntry
         public ?string $slotRange,
         public int $depth,
         public bool $selectable,
+        public bool $collapseHost = false,
     ) {
     }
 
@@ -18,7 +19,7 @@ final readonly class ClusterTreeViewEntry
     {
         $prefix = str_repeat('  ', max(0, $this->depth));
 
-        return sprintf('%s%s', $prefix, $this->node->address());
+        return sprintf('%s%s', $prefix, $this->node->displayAddress($this->collapseHost));
     }
 
     public function roleLabel(): string

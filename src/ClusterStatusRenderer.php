@@ -13,6 +13,7 @@ final class ClusterStatusRenderer
     {
         $width = max(40, $width);
         $lines = [];
+        $collapseHosts = ClusterNodeAddressFormatter::shouldCollapseHosts($shards);
 
         $lines[] = sprintf('Cluster status (seed 127.0.0.1:%d)%s', $seedPort, $watchMode ? ' [watch]' : '');
         $lines[] = sprintf('Updated: %s', date('Y-m-d H:i:s'));
@@ -25,18 +26,18 @@ final class ClusterStatusRenderer
         }
 
         foreach ($shards as $shard) {
-            $lines[] = $this->renderNodeLine($shard->master, $shard->slotRange(), false, $width);
+            $lines[] = $this->renderNodeLine($shard->master, $shard->slotRange(), false, $width, $collapseHosts);
             foreach ($shard->replicas as $replica) {
-                $lines[] = $this->renderNodeLine($replica, null, true, $width);
+                $lines[] = $this->renderNodeLine($replica, null, true, $width, $collapseHosts);
             }
         }
 
         return implode(PHP_EOL, $lines) . PHP_EOL;
     }
 
-    private function renderNodeLine(ClusterNodeStatus $node, ?string $slotRange, bool $replica, int $width): string
+    private function renderNodeLine(ClusterNodeStatus $node, ?string $slotRange, bool $replica, int $width, bool $collapseHosts): string
     {
-        $address = $node->address();
+        $address = $node->displayAddress($collapseHosts);
         $prefix = $replica ? ' - ' : '   ';
 
         if ($width >= 95) {

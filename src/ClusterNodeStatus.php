@@ -25,9 +25,42 @@ final readonly class ClusterNodeStatus
 
     public function address(): string
     {
-        $host = $this->endpoint !== '' ? $this->endpoint : $this->ip;
+        $host = $this->host();
 
         return sprintf('%s:%d', $host, $this->port);
+    }
+
+    public function displayAddress(bool $collapseLoopbackHost = false): string
+    {
+        if ($collapseLoopbackHost && $this->isLoopbackHost()) {
+            return (string) $this->port;
+        }
+
+        return $this->address();
+    }
+
+    public function isLoopbackHost(): bool
+    {
+        $host = strtolower(trim($this->host(), '[]'));
+        if ($host === 'localhost') {
+            return true;
+        }
+
+        $packed = @inet_pton($host);
+        if ($packed === false) {
+            return false;
+        }
+
+        if (strlen($packed) === 4) {
+            return ord($packed[0]) === 127;
+        }
+
+        return $packed === inet_pton('::1');
+    }
+
+    private function host(): string
+    {
+        return $this->endpoint !== '' ? $this->endpoint : $this->ip;
     }
 
     public function withUsedMemoryBytes(?int $usedMemoryBytes): self

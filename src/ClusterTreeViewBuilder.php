@@ -13,6 +13,7 @@ final class ClusterTreeViewBuilder
     public function build(array $shards, ClusterTreeViewMode $mode): array
     {
         $entries = [];
+        $collapseHosts = ClusterNodeAddressFormatter::shouldCollapseHosts($shards);
 
         foreach ($shards as $shard) {
             if ($mode === ClusterTreeViewMode::FailedReplicasOnly) {
@@ -30,6 +31,7 @@ final class ClusterTreeViewBuilder
                     slotRange: $shard->slotRange(),
                     depth: 0,
                     selectable: false,
+                    collapseHost: $collapseHosts,
                 );
 
                 foreach ($failedReplicas as $replica) {
@@ -38,6 +40,7 @@ final class ClusterTreeViewBuilder
                         slotRange: null,
                         depth: 1,
                         selectable: true,
+                        collapseHost: $collapseHosts,
                     );
                 }
 
@@ -49,6 +52,7 @@ final class ClusterTreeViewBuilder
                 slotRange: $shard->slotRange(),
                 depth: 0,
                 selectable: true,
+                collapseHost: $collapseHosts,
             );
 
             if ($mode === ClusterTreeViewMode::PrimariesOnly) {
@@ -61,6 +65,7 @@ final class ClusterTreeViewBuilder
                     slotRange: null,
                     depth: 1,
                     selectable: true,
+                    collapseHost: $collapseHosts,
                 );
             }
         }
