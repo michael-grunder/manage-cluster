@@ -8,6 +8,9 @@ use Mgrunder\CreateCluster\ClusterNodeStatus;
 use Mgrunder\CreateCluster\ClusterShardStatus;
 use Mgrunder\CreateCluster\ClusterStatusTuiRenderer;
 use PhpTui\Tui\Extension\Core\Widget\TableWidget;
+use PhpTui\Tui\Layout\Constraint\LengthConstraint;
+use PhpTui\Tui\Layout\Constraint\MaxConstraint;
+use PhpTui\Tui\Layout\Constraint\MinConstraint;
 use PhpTui\Tui\Widget\HorizontalAlignment;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
@@ -48,6 +51,28 @@ final class ClusterStatusTuiRendererTest extends TestCase
         self::assertSame('↳ 7005', $widget->widget->rows[1]->cells[0]->content->lines[0]->spans[0]->content);
     }
 
+    public function testBuildRootWidgetUsesContentAwareColumnWidths(): void
+    {
+        $renderer = new ClusterStatusTuiRenderer();
+
+        $widget = $this->invokeBuildRootWidget($renderer, $this->sampleShards(), true);
+
+        self::assertInstanceOf(TableWidget::class, $widget->widget);
+        self::assertCount(6, $widget->widget->widths);
+        self::assertInstanceOf(MaxConstraint::class, $widget->widget->widths[0]);
+        self::assertSame(6, $widget->widget->widths[0]->max);
+        self::assertInstanceOf(LengthConstraint::class, $widget->widget->widths[1]);
+        self::assertSame(9, $widget->widget->widths[1]->length);
+        self::assertInstanceOf(MaxConstraint::class, $widget->widget->widths[2]);
+        self::assertSame(6, $widget->widget->widths[2]->max);
+        self::assertInstanceOf(MaxConstraint::class, $widget->widget->widths[3]);
+        self::assertSame(6, $widget->widget->widths[3]->max);
+        self::assertInstanceOf(MaxConstraint::class, $widget->widget->widths[4]);
+        self::assertSame(7, $widget->widget->widths[4]->max);
+        self::assertInstanceOf(MinConstraint::class, $widget->widget->widths[5]);
+        self::assertSame(8, $widget->widget->widths[5]->min);
+    }
+
     /**
      * @param list<ClusterShardStatus> $shards
      */
@@ -79,10 +104,10 @@ final class ClusterStatusTuiRendererTest extends TestCase
             new ClusterShardStatus(
                 slotStart: 0,
                 slotEnd: 5460,
-                master: new ClusterNodeStatus('master-7000', '127.0.0.1', 7000, '', 'master', 100, 'online'),
+                master: new ClusterNodeStatus('master-7000', '127.0.0.1', 7000, '', 'master', 100, 'online', 1024),
                 replicas: [
-                    new ClusterNodeStatus('replica-7005', '127.0.0.1', 7005, '', 'replica', 99, 'online'),
-                    new ClusterNodeStatus('replica-7008', '127.0.0.1', 7008, '', 'replica', 98, 'online'),
+                    new ClusterNodeStatus('replica-7005', '127.0.0.1', 7005, '', 'replica', 99, 'online', 1024),
+                    new ClusterNodeStatus('replica-7008', '127.0.0.1', 7008, '', 'replica', 98, 'online', 1024),
                 ],
             ),
         ];

@@ -24,9 +24,7 @@ final class ClusterStatusTuiRenderer
     private const REPLICA_PREFIX = '↳ ';
     private const NODE_ID_LENGTH = 8;
     private const ID_COLUMN_WIDTH = self::NODE_ID_LENGTH + 1;
-    private const SLOTS_COLUMN_WIDTH = 14;
-    private const OFFSET_COLUMN_WIDTH = 11;
-    private const MEMORY_COLUMN_WIDTH = 10;
+    private const HEALTH_COLUMN_MIN_WIDTH = 8;
 
     private ?Display $display = null;
     private ?int $viewportHeight = null;
@@ -105,14 +103,7 @@ final class ClusterStatusTuiRenderer
         $table = TableWidget::default()
             ->header($this->buildTableHeader())
             ->rows(...$this->buildTableRows($shards, $collapseHosts))
-            ->widths(
-                Constraint::percentage(34),
-                Constraint::length(self::ID_COLUMN_WIDTH),
-                Constraint::length(self::SLOTS_COLUMN_WIDTH),
-                Constraint::length(self::OFFSET_COLUMN_WIDTH),
-                Constraint::length(self::MEMORY_COLUMN_WIDTH),
-                Constraint::min(8),
-            );
+            ->widths(...$this->buildTableWidths($shards, $collapseHosts));
 
         $title = Title::fromString(sprintf(' Cluster Status%s ', $watchMode ? ' [watch]' : ''));
         $clock = Title::fromString(sprintf(' %s ', date('H:i:s')))
@@ -125,6 +116,22 @@ final class ClusterStatusTuiRenderer
             ->titleStyle(Style::default()->addModifier(Modifier::BOLD))
             ->titles($title, $clock)
             ->widget($table);
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     * @return list<Constraint>
+     */
+    private function buildTableWidths(array $shards, bool $collapseHosts): array
+    {
+        return [
+            Constraint::max($this->maxNodeColumnWidth($shards, $collapseHosts)),
+            Constraint::length(self::ID_COLUMN_WIDTH),
+            Constraint::max($this->maxSlotsColumnWidth($shards)),
+            Constraint::max($this->maxOffsetColumnWidth($shards)),
+            Constraint::max($this->maxMemoryColumnWidth($shards)),
+            Constraint::min(self::HEALTH_COLUMN_MIN_WIDTH),
+        ];
     }
 
     private function buildTableHeader(): TableRow
@@ -170,5 +177,81 @@ final class ClusterStatusTuiRenderer
             MemoryUsageFormatter::format($node->usedMemoryBytes),
             $node->health,
         );
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function maxNodeColumnWidth(array $shards, bool $collapseHosts): int
+    {
+        $width = $this->stringWidth('Node');
+
+        foreach ($shards as $shard) {
+            $width = max($width, $this->stringWidth($shard->master->displayAddress($collapseHosts)));
+
+            foreach ($shard->replicas as $replica) {
+                $width = max($width, $this->stringWidth(self::REPLICA_PREFIX . $replica->displayAddress($collapseHosts)));
+            }
+        }
+
+        return $width;
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function maxSlotsColumnWidth(array $shards): int
+    {
+        $width = $this->stringWidth('Slots');
+
+        foreach ($shards as $shard) {
+            $width = max($width, $this->stringWidth($shard->slotRange()));
+        }
+
+        return $width;
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function maxOffsetColumnWidth(array $shards): int
+    {
+        $width = $this->stringWidth('Offset');
+
+        foreach ($shards as $shard) {
+            $width = max($width, $this->stringWidth((string) $shard->master->replicationOffset));
+            foreach ($shard->replicas as $replica) {
+                $width = max($width, $this->stringWidth((string) $replica->replicationOffset));
+            }
+        }
+
+        return $width;
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function maxMemoryColumnWidth(array $shards): int
+    {
+        $width = $this->stringWidth('Memory');
+
+        foreach ($shards as $shard) {
+            $width = max($width, $this->stringWidth(MemoryUsageFormatter::format($shard->master->usedMemoryBytes)));
+
+            foreach ($shard->replicas as $replica) {
+                $width = max($width, $this->stringWidth(MemoryUsageFormatter::format($replica->usedMemoryBytes)));
+            }
+        }
+
+        return $width;
+    }
+
+    private function stringWidth(string $value): int
+    {
+        if (function_exists('mb_strwidth')) {
+            return mb_strwidth($value, 'UTF-8');
+        }
+
+        return strlen($value);
     }
 }
