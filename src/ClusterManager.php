@@ -182,6 +182,8 @@ final class ClusterManager
 
     public function stop(CommandLineOptions $options): void
     {
+        $this->systemInspector->ensureExecutableExists($options->redisCliBinary, 'redis-cli');
+
         $clusters = [];
         foreach ($options->ports as $port) {
             $metadata = $this->stateStore->findClusterByPort($port);
@@ -201,9 +203,13 @@ final class ClusterManager
             $clusters[$id] = $metadata;
         }
 
+        /** @var list<array{metadata: array<string, mixed>, label: string, ports: list<int>}> $clusterStops */
+        $clusterStops = [];
+        /** @var array<int, array{port: int, tls: bool, ca_cert: ?string}> $shutdownTargets */
+        $shutdownTargets = [];
         foreach ($clusters as $metadata) {
             $clusterLabel = is_string($metadata['id'] ?? null) ? $metadata['id'] : 'unknown';
-            $this->output->step(sprintf('Stopping cluster %s', $clusterLabel));
+            $this->output->step(sprintf('Resolving nodes for cluster %s', $clusterLabel));
             $seed = $this->extractFirstPort($metadata);
             $tls = (bool) ($metadata['tls'] ?? false);
             $caCert = is_array($metadata['tls_material'] ?? null)
@@ -212,13 +218,38 @@ final class ClusterManager
 
             $ports = $this->discoverPortsForStop($seed, $tls, $caCert, $metadata);
             foreach ($ports as $clusterPort) {
-                $this->output->info(sprintf('Sending SHUTDOWN to port %d', $clusterPort));
-                $this->redisNodeClient->shutdown($clusterPort, $tls, $caCert);
+                $shutdownTargets[$clusterPort] ??= [
+                    'port' => $clusterPort,
+                    'tls' => $tls,
+                    'ca_cert' => $caCert,
+                ];
             }
 
-            $this->output->step('Waiting for nodes to exit');
-            $this->systemInspector->waitForPortsToClose($ports);
+            $clusterStops[] = [
+                'metadata' => $metadata,
+                'label' => $clusterLabel,
+                'ports' => $ports,
+            ];
+        }
 
+        if ($shutdownTargets === []) {
+            return;
+        }
+
+        $ports = array_map('intval', array_keys($shutdownTargets));
+        sort($ports, SORT_NUMERIC);
+
+        $this->output->step(sprintf('Sending SHUTDOWN to %d Redis nodes', count($shutdownTargets)));
+        $shutdownProcesses = $this->startShutdownProcesses($options->redisCliBinary, $shutdownTargets);
+        $this->waitForShutdownProcesses($shutdownProcesses);
+
+        $this->output->step('Waiting for nodes to exit');
+        $this->systemInspector->waitForPortsToClose($ports);
+
+        foreach ($clusterStops as $clusterStop) {
+            $metadata = $clusterStop['metadata'];
+            $clusterLabel = $clusterStop['label'];
+            $ports = $clusterStop['ports'];
             if (is_string($metadata['cluster_dir'] ?? null)) {
                 $this->stateStore->removeClusterMetadata($metadata);
                 $this->output->success(sprintf(
@@ -2376,6 +2407,77 @@ final class ClusterManager
                 implode('; ', $failures),
             ));
         }
+    }
+
+    /**
+     * @param array<int, array{port: int, tls: bool, ca_cert: ?string}> $targets
+     * @return array<int, Process>
+     */
+    private function startShutdownProcesses(string $redisCliBinary, array $targets): array
+    {
+        $processes = [];
+        foreach ($targets as $port => $target) {
+            $this->output->info(sprintf('Sending SHUTDOWN to port %d', $port));
+
+            $process = new Process($this->buildRedisCliShutdownCommand(
+                redisCliBinary: $redisCliBinary,
+                port: $target['port'],
+                tls: $target['tls'],
+                caCert: $target['ca_cert'],
+            ));
+            $process->start();
+
+            $processes[$port] = $process;
+        }
+
+        return $processes;
+    }
+
+    /**
+     * @param array<int, Process> $processes
+     */
+    private function waitForShutdownProcesses(array $processes): void
+    {
+        foreach ($processes as $port => $process) {
+            $process->wait();
+            if ($process->isSuccessful()) {
+                continue;
+            }
+
+            $output = trim($process->getErrorOutput() . "\n" . $process->getOutput());
+            $message = $output === ''
+                ? sprintf('SHUTDOWN process for port %d exited with status %d', $port, $process->getExitCode() ?? -1)
+                : sprintf('SHUTDOWN process for port %d exited with status %d: %s', $port, $process->getExitCode() ?? -1, $output);
+
+            $this->output->warning($message);
+        }
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function buildRedisCliShutdownCommand(string $redisCliBinary, int $port, bool $tls, ?string $caCert): array
+    {
+        $command = [
+            $redisCliBinary,
+            '-h',
+            '127.0.0.1',
+            '-p',
+            (string) $port,
+        ];
+
+        if ($tls) {
+            $command[] = '--tls';
+            if ($caCert !== null) {
+                $command[] = '--cacert';
+                $command[] = $caCert;
+            }
+        }
+
+        $command[] = 'SHUTDOWN';
+        $command[] = 'NOSAVE';
+
+        return $command;
     }
 
     /**
