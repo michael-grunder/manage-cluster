@@ -292,6 +292,10 @@ final class ClusterManager
         $latencyMonitor = $options->watch ? $this->tryCreateLatencyMonitor($tls, $caCert) : null;
 
         try {
+            if ($options->watch) {
+                $this->clearTerminal();
+            }
+
             while (true) {
                 $rawShards = $this->readClusterShardsWithFallback($seedPort, $tls, $caCert);
                 $shards = $this->enrichShardsWithUsedMemory(

@@ -86,6 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Fixed `bin/build-phar` so `composer build-phar` works after `composer install --no-dev` even when Composer omits optional metadata files such as `vendor/composer/autoload_files.php`.
 - Added defensive start-time checks for occupied ports and cluster shape validation before node launch.
+- Fixed the initial `status --watch` draw so fullscreen TUI mode clears stale terminal content before rendering the first frame.
 - Fixed fullscreen `status --watch` rendering to avoid clearing the entire terminal before every redraw, which caused visible frame flashing.
 - Fixed `--binary`/`--redis-cli` explicit filesystem paths so existing executable files are accepted instead of being rejected by command-name lookup.
 - Fixed status TUI column sizing so node IDs no longer run into role labels, and reduced excess spacing between the `Node` and `ID` columns.
