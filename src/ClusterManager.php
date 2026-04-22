@@ -84,10 +84,11 @@ final class ClusterManager
         }
 
         $startedPorts = [];
+        $startProcesses = [];
 
         try {
+            $this->output->step(sprintf('Starting %d Redis nodes', count($options->ports)));
             foreach ($options->ports as $port) {
-                $this->output->step(sprintf('Starting Redis node on port %d', $port));
                 $configPath = $this->writeNodeConfiguration(
                     clusterDir: $clusterDir,
                     port: $port,
@@ -96,11 +97,19 @@ final class ClusterManager
                     tlsMaterial: $tlsMaterial,
                 );
 
-                $this->runProcess([...[$options->redisBinary, $configPath], ...$options->startServerArgs]);
-                $this->redisNodeClient->waitForReady($port, $options->tls, $tlsMaterial['ca_cert'] ?? null);
+                $process = new Process([...[$options->redisBinary, $configPath], ...$options->startServerArgs]);
+                $process->start();
+                $startProcesses[$port] = $process;
                 $startedPorts[] = $port;
-                $this->output->success(sprintf('Redis node %d is ready', $port));
             }
+
+            $this->waitForStartProcesses($startProcesses);
+            $this->output->step('Waiting for Redis nodes to become ready');
+            $this->redisNodeClient->waitForReadyPorts($options->ports, $options->tls, $tlsMaterial['ca_cert'] ?? null);
+            $this->output->success(sprintf(
+                'Redis nodes are ready on ports %s',
+                implode(' ', array_map('strval', $options->ports)),
+            ));
 
             $this->output->step('Creating cluster topology and assigning slots');
             $this->createCluster($options, $tlsMaterial);
@@ -2330,6 +2339,33 @@ final class ClusterManager
     {
         $process = new Process($command);
         $process->mustRun();
+    }
+
+    /**
+     * @param array<int, Process> $processes
+     */
+    private function waitForStartProcesses(array $processes): void
+    {
+        $failures = [];
+        foreach ($processes as $port => $process) {
+            $process->wait();
+            if ($process->isSuccessful()) {
+                continue;
+            }
+
+            $output = trim($process->getErrorOutput() . "\n" . $process->getOutput());
+            $failures[] = $output === ''
+                ? sprintf('port %d exited with status %d', $port, $process->getExitCode() ?? -1)
+                : sprintf('port %d exited with status %d: %s', $port, $process->getExitCode() ?? -1, $output);
+        }
+
+        if ($failures !== []) {
+            throw new RuntimeException(sprintf(
+                'Failed to start Redis node process%s: %s',
+                count($failures) === 1 ? '' : 'es',
+                implode('; ', $failures),
+            ));
+        }
     }
 
     /**

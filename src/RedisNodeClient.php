@@ -28,12 +28,52 @@ final class RedisNodeClient
                 $redis->close();
 
                 return;
-            } catch (RedisException) {
+            } catch (RedisException | RuntimeException) {
                 usleep(100_000);
             }
         }
 
         throw new RuntimeException(sprintf('Timed out waiting for Redis node at port %d', $port));
+    }
+
+    /**
+     * @param list<int> $ports
+     */
+    public function waitForReadyPorts(array $ports, bool $tls, ?string $caCert, float $seconds = 10.0): void
+    {
+        if ($ports === []) {
+            return;
+        }
+
+        $deadline = microtime(true) + $seconds;
+        $remaining = array_fill_keys($ports, true);
+
+        while (microtime(true) < $deadline) {
+            foreach (array_keys($remaining) as $port) {
+                try {
+                    $redis = $this->connectToNode((int) $port, $tls, $caCert);
+                    $redis->ping();
+                    $redis->close();
+
+                    unset($remaining[$port]);
+                } catch (RedisException | RuntimeException) {
+                }
+            }
+
+            if ($remaining === []) {
+                return;
+            }
+
+            usleep(100_000);
+        }
+
+        $timedOutPorts = array_map('intval', array_keys($remaining));
+        sort($timedOutPorts, SORT_NUMERIC);
+
+        throw new RuntimeException(sprintf(
+            'Timed out waiting for Redis nodes at ports %s',
+            implode(' ', array_map('strval', $timedOutPorts)),
+        ));
     }
 
     /**
@@ -95,7 +135,7 @@ final class RedisNodeClient
     {
         try {
             $redis = $this->connectToNode($port, $tls, $caCert);
-        } catch (RedisException) {
+        } catch (RedisException | RuntimeException) {
             return;
         }
 

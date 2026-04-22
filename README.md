@@ -122,6 +122,8 @@ Behavior notes:
 
 - The CLI validates executables, requested ports, and cluster shape before
   launch.
+- Redis nodes are launched concurrently and then waited on as a batch before
+  cluster topology creation.
 - Startup prints the resolved server flavor/version, such as
   `Redis 8.0.0 (e91a340e)`.
 - Managed node files, logs, configs, and metadata live under
