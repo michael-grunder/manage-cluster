@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 ### Added
+- Added `start --primaries N` to choose the primary count for new clusters, with single-port expansion now using `primaries * (replicas + 1)` and defaulting to 3 primaries.
 - Added concurrent Redis node launch and batch readiness waiting for `start`, reducing startup time for larger local clusters.
 - Added `chaos`/`--chaos` action for serialized, stateful replica churn, with
   conservative v1 support for `replica-kill`, `replica-restart`, and

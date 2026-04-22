@@ -35,6 +35,7 @@ final class CommandLineParser
      */
     private const array COMMAND_OPTIONS = [
         'start' => [
+            ['--primaries N', 'Primary count for cluster creation (default: 3)'],
             ['--replicas N', 'Replicas per primary; one seed port expands automatically'],
             ['--gen-script PATH', 'Write a startup shell script instead of launching now'],
             ['--binary PATH', 'Path to redis-server or valkey-server'],
@@ -112,6 +113,7 @@ final class CommandLineParser
     private const array COMMAND_EXAMPLES = [
         'start' => [
             'bin/manage-cluster start 7000',
+            'bin/manage-cluster start 7000 --primaries 4',
             'bin/manage-cluster start 7000 --replicas 1',
             'bin/manage-cluster start 7000-7005 --tls',
             'bin/manage-cluster start 7000 -- --enable-debug-command local',
@@ -167,8 +169,8 @@ final class CommandLineParser
      */
     private const array COMMAND_NOTES = [
         'start' => [
-            'A single seed port expands to contiguous ports based on --replicas.',
-            'With the default replica count (0), one seed port expands to 4 ports.',
+            'A single seed port expands to contiguous ports based on --primaries and --replicas.',
+            'With the defaults, one seed port expands to 3 ports.',
         ],
         'fill' => [
             'PORT is optional when exactly one managed cluster exists in the state store.',
@@ -206,6 +208,8 @@ final class CommandLineParser
         $replicaPort = null;
         $generatedScriptPath = null;
 
+        $primaries = 3;
+        $primariesProvided = false;
         $replicas = 0;
         $redisBinary = getenv('BIN_REDIS') ?: 'redis-server';
         $redisCliBinary = 'redis-cli';
@@ -271,6 +275,11 @@ final class CommandLineParser
 
                 case '--replicas':
                     $replicas = $this->parseIntOption($argv, ++$i, '--replicas');
+                    break;
+
+                case '--primaries':
+                    $primaries = $this->parseIntOption($argv, ++$i, '--primaries');
+                    $primariesProvided = true;
                     break;
 
                 case '--gen-script':
@@ -409,6 +418,10 @@ final class CommandLineParser
             throw new InvalidArgumentException('--replicas must be >= 0.');
         }
 
+        if ($action === 'start' && $primaries < 3) {
+            throw new InvalidArgumentException('--primaries must be >= 3.');
+        }
+
         if ($tlsDays <= 0) {
             throw new InvalidArgumentException('--tls-days must be > 0.');
         }
@@ -517,12 +530,21 @@ final class CommandLineParser
             throw new InvalidArgumentException('--gen-script can only be used with start.');
         }
 
+        if ($action !== 'start' && $primariesProvided) {
+            throw new InvalidArgumentException('--primaries can only be used with start.');
+        }
+
         $ports = [];
         if ($portTokens !== []) {
             $ports = PortParser::parse($portTokens);
         }
         if ($action === 'start' && count($ports) === 1) {
-            $ports = $this->expandSingleStartPort($ports[0], $replicas);
+            $ports = $this->expandSingleStartPort($ports[0], $primaries, $replicas);
+        } elseif ($action === 'start' && $ports !== [] && !$primariesProvided) {
+            $groupSize = $replicas + 1;
+            if ($groupSize > 0 && count($ports) % $groupSize === 0) {
+                $primaries = (int) (count($ports) / $groupSize);
+            }
         }
 
         if (!in_array($action, ['fill', 'status', 'list'], true) && $ports === []) {
@@ -619,6 +641,7 @@ final class CommandLineParser
             ports: $ports,
             replicaPort: $replicaPort,
             generatedScriptPath: $generatedScriptPath,
+            primaries: $primaries,
             replicas: $replicas,
             redisBinary: $redisBinary,
             redisCliBinary: $redisCliBinary,
@@ -714,6 +737,7 @@ final class CommandLineParser
     {
         $optionsWithValues = [
             '--replicas' => true,
+            '--primaries' => true,
             '--gen-script' => true,
             '--binary' => true,
             '--redis-cli' => true,
@@ -860,14 +884,15 @@ final class CommandLineParser
     /**
      * @return list<int>
      */
-    private function expandSingleStartPort(int $startPort, int $replicas): array
+    private function expandSingleStartPort(int $startPort, int $primaries, int $replicas): array
     {
-        $nodeCount = $replicas === 0 ? 4 : 3 * ($replicas + 1);
+        $nodeCount = $primaries * ($replicas + 1);
         $endPort = $startPort + $nodeCount - 1;
         if ($endPort > 65535) {
             throw new InvalidArgumentException(sprintf(
-                'Seed port %d with --replicas %d exceeds max port when expanded (%d).',
+                'Seed port %d with --primaries %d and --replicas %d exceeds max port when expanded (%d).',
                 $startPort,
+                $primaries,
                 $replicas,
                 $endPort,
             ));
@@ -922,7 +947,7 @@ final class CommandLineParser
     private static function commandSynopsis(string $action): string
     {
         return match ($action) {
-            'start' => 'bin/manage-cluster start PORT [PORT ...] [--replicas N] [--tls] [--gen-script PATH] [-- REDIS_SERVER_ARG ...]',
+            'start' => 'bin/manage-cluster start PORT [PORT ...] [--primaries N] [--replicas N] [--tls] [--gen-script PATH] [-- REDIS_SERVER_ARG ...]',
             'stop' => 'bin/manage-cluster stop PORT [PORT ...]',
             'kill' => 'bin/manage-cluster kill PORT',
             'rebalance' => 'bin/manage-cluster rebalance PORT [PORT ...]',

@@ -15,6 +15,7 @@ final readonly class CommandLineOptions
         public array $ports,
         public ?int $replicaPort,
         public ?string $generatedScriptPath,
+        public int $primaries,
         public int $replicas,
         public string $redisBinary,
         public string $redisCliBinary,

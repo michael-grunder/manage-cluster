@@ -35,6 +35,15 @@ final class StartScriptGenerator
         if ($masters < 3) {
             throw new InvalidArgumentException(sprintf('Need at least 3 masters, got %d.', $masters));
         }
+        if ($masters !== $options->primaries) {
+            throw new InvalidArgumentException(sprintf(
+                'Node count (%d) with --replicas %d creates %d primaries, but --primaries is %d.',
+                count($options->ports),
+                $options->replicas,
+                $masters,
+                $options->primaries,
+            ));
+        }
 
         $lines = [
             '#!/usr/bin/env bash',
@@ -47,6 +56,7 @@ final class StartScriptGenerator
             'TLS_ENABLED=' . ($options->tls ? '1' : '0'),
             'TLS_DAYS=' . (string) $options->tlsDays,
             'TLS_RSA_BITS=' . (string) $options->tlsRsaBits,
+            'PRIMARIES=' . (string) $options->primaries,
             'REPLICAS=' . (string) $options->replicas,
             'CLUSTER_CREATE_HOST=' . $this->quote($options->announceIp ?: '127.0.0.1'),
             'START_SUCCESSFUL=0',
@@ -309,6 +319,9 @@ final class StartScriptGenerator
             'MASTERS=$(( ${#PORTS[@]} / GROUP_SIZE ))',
             'if (( MASTERS < 3 )); then',
             '  die "Need at least 3 masters, got ${MASTERS}."',
+            'fi',
+            'if (( MASTERS != PRIMARIES )); then',
+            '  die "Node count (${#PORTS[@]}) with --replicas ${REPLICAS} creates ${MASTERS} primaries, but --primaries is ${PRIMARIES}."',
             'fi',
             '',
             'for port in "${PORTS[@]}"; do',

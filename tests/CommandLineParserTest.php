@@ -357,9 +357,53 @@ final class CommandLineParserTest extends TestCase
         ]);
 
         self::assertSame('start', $options->action);
-        self::assertSame([7000, 7001, 7002, 7003], $options->ports);
+        self::assertSame([7000, 7001, 7002], $options->ports);
+        self::assertSame(3, $options->primaries);
         self::assertNull($options->generatedScriptPath);
         self::assertSame(['--enable-debug-command', 'local', '--save', ''], $options->startServerArgs);
+    }
+
+    public function testParsesStartPrimariesForSingleSeedPortExpansion(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'start', '7000', '--primaries', '4']);
+
+        self::assertSame('start', $options->action);
+        self::assertSame(4, $options->primaries);
+        self::assertSame([7000, 7001, 7002, 7003], $options->ports);
+    }
+
+    public function testParsesStartPrimariesWithReplicasForSingleSeedPortExpansion(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'start', '7000', '--primaries', '4', '--replicas', '1']);
+
+        self::assertSame('start', $options->action);
+        self::assertSame(4, $options->primaries);
+        self::assertSame(1, $options->replicas);
+        self::assertSame([7000, 7001, 7002, 7003, 7004, 7005, 7006, 7007], $options->ports);
+    }
+
+    public function testRejectsStartPrimariesBelowClusterMinimum(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--primaries must be >= 3.');
+
+        $parser->parse(['bin/manage-cluster', 'start', '7000', '--primaries', '2']);
+    }
+
+    public function testRejectsPrimariesOutsideStart(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--primaries can only be used with start.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--primaries', '4']);
     }
 
     public function testParsesGeneratedStartScriptPath(): void

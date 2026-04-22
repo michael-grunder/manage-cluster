@@ -65,6 +65,12 @@ Start a 3-primary, 1-replica-per-primary cluster:
 bin/manage-cluster start 7000 --replicas 1
 ```
 
+Start a 4-primary cluster:
+
+```bash
+bin/manage-cluster start 7000 --primaries 4
+```
+
 Inspect it:
 
 ```bash
@@ -87,12 +93,13 @@ Port arguments accept:
 
 For `start`, a single port expands automatically:
 
-- `bin/manage-cluster start 7000` expands to `7000..7003`
+- `bin/manage-cluster start 7000` expands to `7000..7002`
 - `bin/manage-cluster start 7000 --replicas 1` expands to 6 ports
-- In general, a single seed port expands to `3 * (replicas + 1)` ports
+- `bin/manage-cluster start 7000 --primaries 4 --replicas 1` expands to 8 ports
+- In general, a single seed port expands to `primaries * (replicas + 1)` ports
 
-The final port count must be divisible by `replicas + 1`, and the resulting
-cluster must contain at least 3 primaries.
+The final port count must match the requested primary count and be divisible by
+`replicas + 1`. A cluster must contain at least 3 primaries.
 
 ## Commands
 
@@ -102,6 +109,7 @@ Starts one local Redis Cluster and records its metadata in the state store.
 
 ```bash
 bin/manage-cluster start 7000
+bin/manage-cluster start 7000 --primaries 4
 bin/manage-cluster start 7000 --replicas 2
 bin/manage-cluster start 7000-7005 --binary valkey-server
 bin/manage-cluster start 7000 -- --enable-debug-command local
@@ -109,6 +117,7 @@ bin/manage-cluster start 7000 -- --enable-debug-command local
 
 Useful options:
 
+- `--primaries N` sets the primary count (default: 3)
 - `--replicas N` sets replicas per primary
 - `--binary PATH` selects `redis-server` or `valkey-server`
 - `--cluster-announce-ip IP` advertises a fixed address for all started nodes

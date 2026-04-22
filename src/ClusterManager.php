@@ -58,6 +58,15 @@ final class ClusterManager
         if ($masters < 3) {
             throw new RuntimeException(sprintf('Need at least 3 masters, got %d.', $masters));
         }
+        if ($masters !== $options->primaries) {
+            throw new RuntimeException(sprintf(
+                'Node count (%d) with --replicas %d creates %d primaries, but --primaries is %d.',
+                count($options->ports),
+                $options->replicas,
+                $masters,
+                $options->primaries,
+            ));
+        }
 
         foreach ($options->ports as $port) {
             if ($this->systemInspector->isPortListening($port)) {
@@ -129,6 +138,7 @@ final class ClusterManager
             'cluster_dir' => $clusterDir,
             'created_at' => date(DATE_ATOM),
             'ports' => $options->ports,
+            'primaries' => $options->primaries,
             'replicas' => $options->replicas,
             'tls' => $options->tls,
             'announce_ip' => $options->announceIp,

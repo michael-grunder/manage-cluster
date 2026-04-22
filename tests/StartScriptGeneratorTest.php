@@ -20,6 +20,7 @@ final class StartScriptGeneratorTest extends TestCase
             ports: [7000, 7001, 7002],
             replicaPort: null,
             generatedScriptPath: 'start-cluster.sh',
+            primaries: 3,
             replicas: 0,
             redisBinary: '/opt/redis/bin/redis-server',
             redisCliBinary: '/opt/redis/bin/redis-cli',
@@ -36,6 +37,7 @@ final class StartScriptGeneratorTest extends TestCase
 
         self::assertStringContainsString("REQUESTED_REDIS_SERVER='/opt/redis/bin/redis-server'", $script);
         self::assertStringContainsString("REQUESTED_REDIS_CLI='/opt/redis/bin/redis-cli'", $script);
+        self::assertStringContainsString('PRIMARIES=3', $script);
         self::assertStringContainsString('step "Validating required executables and runtime prerequisites"', $script);
         self::assertStringContainsString('assert_port_available "$port"', $script);
         self::assertStringContainsString('START_SERVER_ARGS=(', $script);
@@ -58,6 +60,35 @@ final class StartScriptGeneratorTest extends TestCase
             ports: [7000],
             replicaPort: null,
             generatedScriptPath: 'status.sh',
+            primaries: 3,
+            replicas: 0,
+            redisBinary: 'redis-server',
+            redisCliBinary: 'redis-cli',
+            announceIp: null,
+            tls: false,
+            tlsDays: 3650,
+            tlsRsaBits: 2048,
+            stateDir: '/tmp/manage-cluster',
+            watch: false,
+            fill: null,
+            chaos: null,
+            startServerArgs: [],
+        ));
+    }
+
+    public function testRejectsPrimaryCountMismatch(): void
+    {
+        $generator = new StartScriptGenerator();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Node count (3) with --replicas 0 creates 3 primaries, but --primaries is 4.');
+
+        $generator->generate(new CommandLineOptions(
+            action: 'start',
+            ports: [7000, 7001, 7002],
+            replicaPort: null,
+            generatedScriptPath: 'start-cluster.sh',
+            primaries: 4,
             replicas: 0,
             redisBinary: 'redis-server',
             redisCliBinary: 'redis-cli',

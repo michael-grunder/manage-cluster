@@ -104,7 +104,6 @@ final class ClusterStatusTuiRendererTest extends TestCase
     ): object
     {
         $method = new ReflectionMethod($renderer, 'buildRootWidget');
-        $method->setAccessible(true);
 
         return $method->invoke($renderer, $shards, $watchMode, $latenciesByPort);
     }
@@ -115,7 +114,6 @@ final class ClusterStatusTuiRendererTest extends TestCase
     private function invokeCalculateViewportHeight(ClusterStatusTuiRenderer $renderer, array $shards): int
     {
         $method = new ReflectionMethod($renderer, 'calculateViewportHeight');
-        $method->setAccessible(true);
 
         return $method->invoke($renderer, $shards);
     }
