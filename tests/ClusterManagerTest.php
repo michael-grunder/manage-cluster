@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mgrunder\CreateCluster\Tests;
 
 use Mgrunder\CreateCluster\ClusterManager;
+use Mgrunder\CreateCluster\PortRangeFormatter;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
@@ -14,11 +15,7 @@ final class ClusterManagerTest extends TestCase
     #[DataProvider('compactPortListProvider')]
     public function testFormatCompactPortList(array $ports, string $expected): void
     {
-        $manager = $this->newClusterManagerWithoutConstructor();
-        $reflection = new ReflectionClass($manager);
-        $method = $reflection->getMethod('formatCompactPortList');
-
-        self::assertSame($expected, $method->invoke($manager, $ports));
+        self::assertSame($expected, PortRangeFormatter::formatCompactList($ports));
     }
 
     /**

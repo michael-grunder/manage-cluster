@@ -117,7 +117,7 @@ final class ClusterManager
             $this->redisNodeClient->waitForReadyPorts($options->ports, $options->tls, $tlsMaterial['ca_cert'] ?? null);
             $this->output->success(sprintf(
                 'Redis nodes are ready on ports %s',
-                implode(' ', array_map('strval', $options->ports)),
+                PortRangeFormatter::formatCompactList($options->ports),
             ));
 
             $this->output->step('Creating cluster topology and assigning slots');
@@ -151,7 +151,7 @@ final class ClusterManager
 
         $this->output->success(sprintf('Started cluster %s', $clusterId));
         $this->output->detail('State', $clusterDir);
-        $this->output->detail('Ports', implode(' ', array_map('strval', $options->ports)));
+        $this->output->detail('Ports', PortRangeFormatter::formatCompactList($options->ports));
     }
 
     public function generateStartScript(CommandLineOptions $options): void
@@ -2615,16 +2615,7 @@ final class ClusterManager
      */
     private function formatPortRange(array $ports): string
     {
-        $count = count($ports);
-        if ($count === 0) {
-            return '-';
-        }
-
-        if ($count === 1) {
-            return (string) $ports[0];
-        }
-
-        return sprintf('%d-%d', $ports[0], $ports[$count - 1]);
+        return PortRangeFormatter::formatRange($ports);
     }
 
     /**
@@ -2632,44 +2623,7 @@ final class ClusterManager
      */
     private function formatCompactPortList(array $ports): string
     {
-        if ($ports === []) {
-            return '-';
-        }
-
-        $segments = [];
-        $rangeStart = $ports[0];
-        $previous = $ports[0];
-
-        for ($index = 1, $count = count($ports); $index < $count; $index++) {
-            $port = $ports[$index];
-            if ($port === $previous + 1) {
-                $previous = $port;
-                continue;
-            }
-
-            array_push($segments, ...$this->formatCompactPortSegment($rangeStart, $previous));
-            $rangeStart = $previous = $port;
-        }
-
-        array_push($segments, ...$this->formatCompactPortSegment($rangeStart, $previous));
-
-        return implode(' ', $segments);
-    }
-
-    /**
-     * @return list<string>
-     */
-    private function formatCompactPortSegment(int $start, int $end): array
-    {
-        if ($start === $end) {
-            return [(string) $start];
-        }
-
-        if ($end === $start + 1) {
-            return [(string) $start, (string) $end];
-        }
-
-        return [sprintf('%d-%d', $start, $end)];
+        return PortRangeFormatter::formatCompactList($ports);
     }
 
     /**
