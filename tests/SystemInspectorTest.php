@@ -8,6 +8,8 @@ use Mgrunder\CreateCluster\SystemInspector;
 use PHPUnit\Framework\Attributes\RequiresFunction;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
+use Symfony\Component\Process\Exception\ProcessSignaledException;
+use Symfony\Component\Process\Process;
 
 #[RequiresFunction('chmod')]
 final class SystemInspectorTest extends TestCase
@@ -78,6 +80,34 @@ final class SystemInspectorTest extends TestCase
             self::assertSame(basename($path), $inspector->describeServerBinary($path));
         } finally {
             @unlink($path);
+        }
+    }
+
+    public function testSendSignalTerminatesRunningProcess(): void
+    {
+        $process = new Process([PHP_BINARY, '-r', 'sleep(30);']);
+        $process->start();
+        $inspector = new SystemInspector();
+
+        try {
+            $pid = $process->getPid();
+            self::assertIsInt($pid);
+            self::assertGreaterThan(0, $pid);
+            self::assertTrue($inspector->isProcessRunning($pid));
+            self::assertTrue($inspector->sendSignal($pid, 15, 'TERM'));
+
+            try {
+                $process->wait();
+            } catch (ProcessSignaledException $exception) {
+                self::assertSame(15, $exception->getSignal());
+            }
+
+            self::assertTrue($inspector->waitForProcessExit($pid, 0.2));
+            self::assertFalse($inspector->isProcessRunning($pid));
+        } finally {
+            if ($process->isRunning()) {
+                $process->stop(0.0);
+            }
         }
     }
 

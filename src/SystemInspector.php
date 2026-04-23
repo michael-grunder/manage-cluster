@@ -10,6 +10,8 @@ use Symfony\Component\Process\Process;
 
 final class SystemInspector
 {
+    private const float PORT_POLL_INTERVAL_SECONDS = 0.1;
+
     public function ensureExecutableExists(string $binary, string $name): void
     {
         $this->resolveExecutablePath($binary, $name);
@@ -88,17 +90,76 @@ final class SystemInspector
 
     /**
      * @param list<int> $ports
+     * @return list<int>
+     */
+    public function findListeningPorts(array $ports): array
+    {
+        $open = [];
+        foreach ($ports as $port) {
+            if ($this->isPortListening($port)) {
+                $open[] = $port;
+            }
+        }
+
+        return $open;
+    }
+
+    public function isProcessRunning(int $pid): bool
+    {
+        if ($pid <= 0) {
+            return false;
+        }
+
+        if (function_exists('posix_kill')) {
+            return @posix_kill($pid, 0);
+        }
+
+        return is_dir(sprintf('/proc/%d', $pid));
+    }
+
+    public function sendSignal(int $pid, int $signal, string $signalName): bool
+    {
+        if (!$this->isProcessRunning($pid)) {
+            return false;
+        }
+
+        if (function_exists('posix_kill')) {
+            return @posix_kill($pid, $signal);
+        }
+
+        $process = new Process(['/bin/kill', sprintf('-%s', $signalName), (string) $pid]);
+        $process->run();
+
+        return $process->isSuccessful();
+    }
+
+    public function waitForProcessExit(int $pid, float $seconds = 5.0): bool
+    {
+        $deadline = microtime(true) + $seconds;
+        while (microtime(true) < $deadline) {
+            if (!$this->isProcessRunning($pid)) {
+                return true;
+            }
+
+            usleep((int) (self::PORT_POLL_INTERVAL_SECONDS * 1_000_000));
+        }
+
+        return !$this->isProcessRunning($pid);
+    }
+
+    /**
+     * @param list<int> $ports
      */
     public function waitForPortsToClose(array $ports, float $seconds = 5.0): void
     {
         $deadline = microtime(true) + $seconds;
         while (microtime(true) < $deadline) {
-            $open = array_filter($ports, fn (int $port): bool => $this->isPortListening($port));
+            $open = $this->findListeningPorts($ports);
             if ($open === []) {
                 return;
             }
 
-            usleep(100_000);
+            usleep((int) (self::PORT_POLL_INTERVAL_SECONDS * 1_000_000));
         }
     }
 }

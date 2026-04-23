@@ -149,8 +149,11 @@ bin/manage-cluster stop 7000-7005
 ```
 
 When the seed port belongs to a managed cluster, the command stops all cluster
-members and removes its saved metadata. If the port is not in the state store,
-the CLI falls back to stopping the reachable cluster from that seed.
+members and removes its saved metadata. If a node accepts the initial
+`SHUTDOWN NOSAVE` request but then stays stuck in a blocked state, `stop`
+waits briefly and escalates to OS signals for managed nodes so one hung server
+does not stall the whole batch. If the port is not in the state store, the CLI
+falls back to stopping the reachable cluster from that seed.
 
 ### `status`
 

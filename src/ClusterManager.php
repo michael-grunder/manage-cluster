@@ -12,6 +12,8 @@ final class ClusterManager
 {
     private const int CHAOS_STABLE_POLLS = 2;
     private const int CHAOS_PRIMARY_REPLICA_CAP = 2;
+    private const float STOP_SHUTDOWN_GRACE_SECONDS = 2.0;
+    private const float STOP_SIGNAL_WAIT_SECONDS = 1.0;
 
     public function __construct(
         private readonly SystemInspector $systemInspector,
@@ -205,7 +207,7 @@ final class ClusterManager
 
         /** @var list<array{metadata: array<string, mixed>, label: string, ports: list<int>}> $clusterStops */
         $clusterStops = [];
-        /** @var array<int, array{port: int, tls: bool, ca_cert: ?string}> $shutdownTargets */
+        /** @var array<int, array{port: int, tls: bool, ca_cert: ?string, pid: ?int}> $shutdownTargets */
         $shutdownTargets = [];
         foreach ($clusters as $metadata) {
             $clusterLabel = is_string($metadata['id'] ?? null) ? $metadata['id'] : 'unknown';
@@ -215,6 +217,7 @@ final class ClusterManager
             $caCert = is_array($metadata['tls_material'] ?? null)
                 ? (is_string($metadata['tls_material']['ca_cert'] ?? null) ? $metadata['tls_material']['ca_cert'] : null)
                 : null;
+            $clusterDir = is_string($metadata['cluster_dir'] ?? null) ? $metadata['cluster_dir'] : null;
 
             $ports = $this->discoverPortsForStop($seed, $tls, $caCert, $metadata);
             foreach ($ports as $clusterPort) {
@@ -222,6 +225,7 @@ final class ClusterManager
                     'port' => $clusterPort,
                     'tls' => $tls,
                     'ca_cert' => $caCert,
+                    'pid' => $clusterDir !== null ? $this->readNodePid($clusterDir, $clusterPort) : null,
                 ];
             }
 
@@ -245,10 +249,26 @@ final class ClusterManager
             $this->formatCompactPortList($ports),
         ));
         $shutdownProcesses = $this->startShutdownProcesses($options->redisCliBinary, $shutdownTargets);
-        $this->waitForShutdownProcesses($shutdownProcesses);
+        $this->waitForShutdownProcesses($shutdownProcesses, self::STOP_SHUTDOWN_GRACE_SECONDS);
+
+        $portsStillListening = $this->systemInspector->findListeningPorts($ports);
+        if ($portsStillListening !== []) {
+            $this->output->warning(sprintf(
+                'Ports %s are still accepting connections after SHUTDOWN; escalating to process signals.',
+                $this->formatCompactPortList($portsStillListening),
+            ));
+            $this->escalateShutdownSignals($shutdownTargets, $portsStillListening);
+        }
 
         $this->output->step('Waiting for nodes to exit');
         $this->systemInspector->waitForPortsToClose($ports);
+        $remainingPorts = $this->systemInspector->findListeningPorts($ports);
+        if ($remainingPorts !== []) {
+            throw new RuntimeException(sprintf(
+                'Failed to stop ports %s',
+                $this->formatCompactPortList($remainingPorts),
+            ));
+        }
 
         foreach ($clusterStops as $clusterStop) {
             $metadata = $clusterStop['metadata'];
@@ -2414,7 +2434,7 @@ final class ClusterManager
     }
 
     /**
-     * @param array<int, array{port: int, tls: bool, ca_cert: ?string}> $targets
+     * @param array<int, array{port: int, tls: bool, ca_cert: ?string, pid: ?int}> $targets
      * @return array<int, Process>
      */
     private function startShutdownProcesses(string $redisCliBinary, array $targets): array
@@ -2438,28 +2458,42 @@ final class ClusterManager
     /**
      * @param array<int, Process> $processes
      */
-    private function waitForShutdownProcesses(array $processes): void
+    private function waitForShutdownProcesses(array $processes, float $graceSeconds): void
     {
         /** @var array<string, array{ports: list<int>, exit_code: int, output: string}> $failures */
         $failures = [];
-        foreach ($processes as $port => $process) {
-            $process->wait();
-            if ($process->isSuccessful()) {
-                continue;
+        $running = $processes;
+        $deadline = microtime(true) + $graceSeconds;
+
+        while ($running !== [] && microtime(true) < $deadline) {
+            foreach ($running as $port => $process) {
+                if ($process->isRunning()) {
+                    continue;
+                }
+
+                $this->recordShutdownFailure($failures, $port, $process);
+                unset($running[$port]);
             }
 
-            $output = trim($process->getErrorOutput() . "\n" . $process->getOutput());
-            $exitCode = $process->getExitCode() ?? -1;
-            $key = sprintf('%d|%s', $exitCode, $output);
-            if (!isset($failures[$key])) {
-                $failures[$key] = [
-                    'ports' => [],
-                    'exit_code' => $exitCode,
-                    'output' => $output,
-                ];
+            if ($running !== []) {
+                usleep(100_000);
             }
+        }
 
-            $failures[$key]['ports'][] = $port;
+        if ($running !== []) {
+            $timedOutPorts = array_map('intval', array_keys($running));
+            sort($timedOutPorts, SORT_NUMERIC);
+            $this->output->warning(sprintf(
+                'SHUTDOWN commands timed out after %.1fs for ports %s; continuing with process-level shutdown.',
+                $graceSeconds,
+                $this->formatCompactPortList($timedOutPorts),
+            ));
+
+            foreach ($running as $process) {
+                if ($process->isRunning()) {
+                    $process->stop(0.0);
+                }
+            }
         }
 
         foreach ($failures as $failure) {
@@ -2470,6 +2504,103 @@ final class ClusterManager
                 output: $failure['output'],
             ));
         }
+    }
+
+    /**
+     * @param array<string, array{ports: list<int>, exit_code: int, output: string}> $failures
+     */
+    private function recordShutdownFailure(array &$failures, int $port, Process $process): void
+    {
+        if ($process->isSuccessful()) {
+            return;
+        }
+
+        $output = trim($process->getErrorOutput() . "\n" . $process->getOutput());
+        $exitCode = $process->getExitCode() ?? -1;
+        $key = sprintf('%d|%s', $exitCode, $output);
+        if (!isset($failures[$key])) {
+            $failures[$key] = [
+                'ports' => [],
+                'exit_code' => $exitCode,
+                'output' => $output,
+            ];
+        }
+
+        $failures[$key]['ports'][] = $port;
+    }
+
+    /**
+     * @param array<int, array{port: int, tls: bool, ca_cert: ?string, pid: ?int}> $targets
+     * @param list<int> $ports
+     */
+    private function escalateShutdownSignals(array $targets, array $ports): void
+    {
+        $activePorts = $ports;
+        $portsWithoutPid = [];
+        $signalLadder = [
+            ['signal' => 15, 'name' => 'TERM'],
+            ['signal' => 9, 'name' => 'KILL'],
+        ];
+
+        foreach ($signalLadder as $signalStep) {
+            $signaledPorts = [];
+            foreach ($activePorts as $port) {
+                $pid = $targets[$port]['pid'] ?? null;
+                if (!is_int($pid) || !$this->systemInspector->isProcessRunning($pid)) {
+                    $portsWithoutPid[$port] = true;
+
+                    continue;
+                }
+
+                if ($this->systemInspector->sendSignal($pid, $signalStep['signal'], $signalStep['name'])) {
+                    $signaledPorts[$port] = $pid;
+                }
+            }
+
+            if ($signaledPorts === []) {
+                continue;
+            }
+
+            ksort($signaledPorts, SORT_NUMERIC);
+            $this->output->warning(sprintf(
+                'Sent SIG%s to ports %s (%s)',
+                $signalStep['name'],
+                $this->formatCompactPortList(array_map('intval', array_keys($signaledPorts))),
+                $this->formatPidList($signaledPorts),
+            ));
+
+            foreach ($signaledPorts as $pid) {
+                $this->systemInspector->waitForProcessExit($pid, self::STOP_SIGNAL_WAIT_SECONDS);
+            }
+
+            $this->systemInspector->waitForPortsToClose($activePorts, self::STOP_SIGNAL_WAIT_SECONDS);
+            $activePorts = $this->systemInspector->findListeningPorts($activePorts);
+            if ($activePorts === []) {
+                break;
+            }
+        }
+
+        $unresolvedWithoutPid = array_values(array_intersect($activePorts, array_map('intval', array_keys($portsWithoutPid))));
+        if ($unresolvedWithoutPid !== []) {
+            sort($unresolvedWithoutPid, SORT_NUMERIC);
+            $this->output->warning(sprintf(
+                'Ports %s remained up but no live managed PID was available for signal escalation.',
+                $this->formatCompactPortList($unresolvedWithoutPid),
+            ));
+        }
+    }
+
+    /**
+     * @param array<int, int> $portPidMap
+     */
+    private function formatPidList(array $portPidMap): string
+    {
+        $pairs = [];
+        foreach ($portPidMap as $port => $pid) {
+            $pairs[] = sprintf('%d->%d', $port, $pid);
+        }
+
+        return implode(', ', $pairs);
     }
 
     /**

@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Made `stop` output more concise by collapsing sequential port lists and grouping identical SHUTDOWN warnings across ports.
 - Updated `start` output to collapse sequential port lists into compact ranges, reusing the same shared port-range formatter as `stop`.
 - Updated `stop` to issue Redis shutdown commands in parallel and then wait for all targeted nodes to exit as a batch.
+- Reworked `stop` so hung `redis-cli SHUTDOWN` calls time out quickly and managed nodes that remain up are forced down via escalating process signals instead of stalling the full stop operation.
 - Updated `status --watch` to render an independently probed per-node latency column, using background async probes so latency checks do not block TUI frame rendering.
 - Updated the CLI parser, help text, and README command reference to include the
   new `chaos` command and document its current v1 safety limits.
