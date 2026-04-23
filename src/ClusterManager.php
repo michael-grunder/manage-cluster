@@ -239,7 +239,11 @@ final class ClusterManager
         $ports = array_map('intval', array_keys($shutdownTargets));
         sort($ports, SORT_NUMERIC);
 
-        $this->output->step(sprintf('Sending SHUTDOWN to %d Redis nodes', count($shutdownTargets)));
+        $this->output->step(sprintf(
+            'Sending SHUTDOWN signal to %s %s',
+            count($ports) === 1 ? 'port' : 'ports',
+            $this->formatCompactPortList($ports),
+        ));
         $shutdownProcesses = $this->startShutdownProcesses($options->redisCliBinary, $shutdownTargets);
         $this->waitForShutdownProcesses($shutdownProcesses);
 
@@ -255,10 +259,10 @@ final class ClusterManager
                 $this->output->success(sprintf(
                     'Stopped cluster %s (%s)',
                     $clusterLabel,
-                    implode(' ', array_map('strval', $ports)),
+                    $this->formatCompactPortList($ports),
                 ));
             } else {
-                $this->output->success(sprintf('Stopped nodes: %s', implode(' ', array_map('strval', $ports))));
+                $this->output->success(sprintf('Stopped nodes: %s', $this->formatCompactPortList($ports)));
             }
         }
     }
@@ -2417,8 +2421,6 @@ final class ClusterManager
     {
         $processes = [];
         foreach ($targets as $port => $target) {
-            $this->output->info(sprintf('Sending SHUTDOWN to port %d', $port));
-
             $process = new Process($this->buildRedisCliShutdownCommand(
                 redisCliBinary: $redisCliBinary,
                 port: $target['port'],
@@ -2438,6 +2440,8 @@ final class ClusterManager
      */
     private function waitForShutdownProcesses(array $processes): void
     {
+        /** @var array<string, array{ports: list<int>, exit_code: int, output: string}> $failures */
+        $failures = [];
         foreach ($processes as $port => $process) {
             $process->wait();
             if ($process->isSuccessful()) {
@@ -2445,11 +2449,26 @@ final class ClusterManager
             }
 
             $output = trim($process->getErrorOutput() . "\n" . $process->getOutput());
-            $message = $output === ''
-                ? sprintf('SHUTDOWN process for port %d exited with status %d', $port, $process->getExitCode() ?? -1)
-                : sprintf('SHUTDOWN process for port %d exited with status %d: %s', $port, $process->getExitCode() ?? -1, $output);
+            $exitCode = $process->getExitCode() ?? -1;
+            $key = sprintf('%d|%s', $exitCode, $output);
+            if (!isset($failures[$key])) {
+                $failures[$key] = [
+                    'ports' => [],
+                    'exit_code' => $exitCode,
+                    'output' => $output,
+                ];
+            }
 
-            $this->output->warning($message);
+            $failures[$key]['ports'][] = $port;
+        }
+
+        foreach ($failures as $failure) {
+            sort($failure['ports'], SORT_NUMERIC);
+            $this->output->warning($this->formatShutdownFailureMessage(
+                ports: $failure['ports'],
+                exitCode: $failure['exit_code'],
+                output: $failure['output'],
+            ));
         }
     }
 
@@ -2606,6 +2625,73 @@ final class ClusterManager
         }
 
         return sprintf('%d-%d', $ports[0], $ports[$count - 1]);
+    }
+
+    /**
+     * @param list<int> $ports
+     */
+    private function formatCompactPortList(array $ports): string
+    {
+        if ($ports === []) {
+            return '-';
+        }
+
+        $segments = [];
+        $rangeStart = $ports[0];
+        $previous = $ports[0];
+
+        for ($index = 1, $count = count($ports); $index < $count; $index++) {
+            $port = $ports[$index];
+            if ($port === $previous + 1) {
+                $previous = $port;
+                continue;
+            }
+
+            array_push($segments, ...$this->formatCompactPortSegment($rangeStart, $previous));
+            $rangeStart = $previous = $port;
+        }
+
+        array_push($segments, ...$this->formatCompactPortSegment($rangeStart, $previous));
+
+        return implode(' ', $segments);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function formatCompactPortSegment(int $start, int $end): array
+    {
+        if ($start === $end) {
+            return [(string) $start];
+        }
+
+        if ($end === $start + 1) {
+            return [(string) $start, (string) $end];
+        }
+
+        return [sprintf('%d-%d', $start, $end)];
+    }
+
+    /**
+     * @param list<int> $ports
+     */
+    private function formatShutdownFailureMessage(array $ports, int $exitCode, string $output): string
+    {
+        $subject = count($ports) === 1 ? 'process' : 'processes';
+        $target = count($ports) === 1 ? 'port' : 'ports';
+        $message = sprintf(
+            'SHUTDOWN %s for %s %s exited with status %d',
+            $subject,
+            $target,
+            $this->formatCompactPortList($ports),
+            $exitCode,
+        );
+
+        if ($output === '') {
+            return $message;
+        }
+
+        return sprintf('%s: %s', $message, $output);
     }
 
     private function clearTerminal(): void
