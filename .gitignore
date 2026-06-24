@@ -2,3 +2,5 @@
 /dist/
 .codex
 .phpunit.cache
+redis.stub.php
+redis_cluster.stub.php
