@@ -446,6 +446,47 @@ final class CommandLineParserTest extends TestCase
         self::assertSame(3, $options->primaries);
         self::assertNull($options->generatedScriptPath);
         self::assertSame(['--enable-debug-command', 'local', '--save', ''], $options->startServerArgs);
+        self::assertSame([
+            ['enable-debug-command', 'local'],
+            ['save', ''],
+        ], $options->startConfigDirectives);
+    }
+
+    public function testParsesUnprefixedStartConfigDirectivesAfterDoubleDash(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse([
+            'bin/manage-cluster',
+            'start',
+            '7000',
+            '--replicas',
+            '2',
+            '--',
+            'replica-serve-stale-data',
+            'no',
+        ]);
+
+        self::assertSame(['--replica-serve-stale-data', 'no'], $options->startServerArgs);
+        self::assertSame([
+            ['replica-serve-stale-data', 'no'],
+        ], $options->startConfigDirectives);
+    }
+
+    public function testRejectsIncompleteStartConfigDirectiveAfterDoubleDash(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Arguments after -- must be Redis config directive pairs: NAME VALUE.');
+
+        $parser->parse([
+            'bin/manage-cluster',
+            'start',
+            '7000',
+            '--',
+            'replica-serve-stale-data',
+        ]);
     }
 
     public function testParsesStartPrimariesForSingleSeedPortExpansion(): void

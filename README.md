@@ -113,6 +113,7 @@ bin/manage-cluster start 7000 --primaries 4
 bin/manage-cluster start 7000 --replicas 2
 bin/manage-cluster start 7000-7005 --binary valkey-server
 bin/manage-cluster start 7000 -- --enable-debug-command local
+bin/manage-cluster start 7000 --replicas 2 -- replica-serve-stale-data no
 ```
 
 Useful options:
@@ -125,7 +126,9 @@ Useful options:
 - `--tls-days N` and `--tls-rsa-bits N` tune generated certificates
 - `--gen-script PATH` writes an executable startup script instead of launching
 - `--state-dir PATH` changes where cluster metadata and per-node files are kept
-- Arguments after `--` are appended to every started server process
+- Arguments after `--` must be Redis config directive pairs. They are written
+  into every generated `redis.conf` and also passed to every started server
+  process as command-line config overrides.
 
 Behavior notes:
 
@@ -137,6 +140,8 @@ Behavior notes:
   `Redis 8.0.0 (e91a340e)`.
 - Managed node files, logs, configs, and metadata live under
   `/tmp/manage-cluster` by default.
+- Startup config directives in the generated `redis.conf` are reused when a
+  managed replica is later restarted from its saved node config.
 
 ### `stop`
 

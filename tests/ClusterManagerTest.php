@@ -117,6 +117,39 @@ MESSAGE);
         $method->invoke($manager, $this->clusterShardsFixture(), 7003, true);
     }
 
+    public function testWriteNodeConfigurationPersistsStartConfigDirectives(): void
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $method = $reflection->getMethod('writeNodeConfiguration');
+
+        $clusterDir = sprintf('%s/manage-cluster-test-%s', sys_get_temp_dir(), bin2hex(random_bytes(4)));
+        self::assertTrue(mkdir($clusterDir));
+
+        try {
+            $configPath = $method->invoke(
+                $manager,
+                $clusterDir,
+                7000,
+                null,
+                false,
+                null,
+                [
+                    ['replica-serve-stale-data', 'no'],
+                    ['save', ''],
+                ],
+            );
+
+            self::assertIsString($configPath);
+            $config = file_get_contents($configPath);
+            self::assertIsString($config);
+            self::assertStringContainsString("replica-serve-stale-data no\n", $config);
+            self::assertStringContainsString("save \"\"\n", $config);
+        } finally {
+            $this->removeDirectory($clusterDir);
+        }
+    }
+
     private function newClusterManagerWithoutConstructor(): ClusterManager
     {
         $reflection = new ReflectionClass(ClusterManager::class);
@@ -125,6 +158,30 @@ MESSAGE);
         $manager = $reflection->newInstanceWithoutConstructor();
 
         return $manager;
+    }
+
+    private function removeDirectory(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+
+        $entries = scandir($dir);
+        self::assertNotFalse($entries);
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+
+            $path = sprintf('%s/%s', $dir, $entry);
+            if (is_dir($path)) {
+                $this->removeDirectory($path);
+            } else {
+                self::assertTrue(unlink($path));
+            }
+        }
+
+        self::assertTrue(rmdir($dir));
     }
 
     /**

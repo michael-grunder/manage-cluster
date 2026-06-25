@@ -77,6 +77,15 @@ final class StartScriptGenerator
         array_push($lines, ...$this->buildArrayAssignment('START_SERVER_ARGS', $options->startServerArgs));
         $lines[] = '';
 
+        array_push($lines, ...$this->buildArrayAssignment(
+            'START_CONFIG_LINES',
+            array_map(
+                static fn (array $directive): string => RedisConfigDirectiveFormatter::format($directive[0], $directive[1]),
+                $options->startConfigDirectives,
+            ),
+        ));
+        $lines[] = '';
+
         array_push($lines, ...[
             'STARTED_PORTS=()',
             '',
@@ -288,6 +297,10 @@ final class StartScriptGenerator
             '    if [[ -n "$ANNOUNCE_IP" ]]; then',
             '      printf \'cluster-announce-ip %s\n\' "$ANNOUNCE_IP"',
             '    fi',
+            '',
+            '    for config_line in "${START_CONFIG_LINES[@]}"; do',
+            '      printf \'%s\n\' "$config_line"',
+            '    done',
             '  } > "$config_path"',
             '',
             '  printf \'%s\n\' "$config_path"',

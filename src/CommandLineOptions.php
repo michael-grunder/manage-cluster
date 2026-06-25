@@ -9,6 +9,7 @@ final readonly class CommandLineOptions
     /**
      * @param list<int> $ports
      * @param array<string, string> $restartConfigOverrides
+     * @param list<array{0: string, 1: string}> $startConfigDirectives
      * @param list<string> $startServerArgs
      */
     public function __construct(
@@ -29,6 +30,7 @@ final readonly class CommandLineOptions
         public bool $watch,
         public ?FillOptions $fill,
         public ?ChaosOptions $chaos,
+        public array $startConfigDirectives,
         public array $startServerArgs,
     ) {
     }

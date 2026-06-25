@@ -44,7 +44,7 @@ final class CommandLineParser
             ['--tls-days N', 'Certificate lifetime in days (default: 3650)'],
             ['--tls-rsa-bits N', 'RSA key size for generated certificates (default: 2048)'],
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
-            ['-- REDIS_SERVER_ARG ...', 'Pass raw server arguments to every started node'],
+            ['-- NAME VALUE ...', 'Append Redis config directives to redis.conf and to every started node'],
         ],
         'stop' => [
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
@@ -120,6 +120,7 @@ final class CommandLineParser
             'bin/manage-cluster start 7000 --replicas 1',
             'bin/manage-cluster start 7000-7005 --tls',
             'bin/manage-cluster start 7000 -- --enable-debug-command local',
+            'bin/manage-cluster start 7000 -- replica-serve-stale-data no',
         ],
         'stop' => [
             'bin/manage-cluster stop 7000',
@@ -177,6 +178,7 @@ final class CommandLineParser
         'start' => [
             'A single seed port expands to contiguous ports based on --primaries and --replicas.',
             'With the defaults, one seed port expands to 3 ports.',
+            'Arguments after -- must be Redis config directive pairs and are persisted to each generated redis.conf.',
         ],
         'fill' => [
             'PORT is optional when exactly one managed cluster exists in the state store.',
@@ -465,6 +467,9 @@ final class CommandLineParser
             throw new InvalidArgumentException('Arguments after -- can only be used with start.');
         }
 
+        $startConfigDirectives = $action === 'start' ? $this->parseStartConfigDirectives($startServerArgs) : [];
+        $startServerArgs = $this->buildStartServerArgs($startConfigDirectives);
+
         if ($members <= 0) {
             throw new InvalidArgumentException('--members must be > 0.');
         }
@@ -690,6 +695,7 @@ final class CommandLineParser
             watch: $watch,
             fill: $fillOptions,
             chaos: $chaosOptions,
+            startConfigDirectives: $startConfigDirectives,
             startServerArgs: $startServerArgs,
         );
     }
@@ -986,11 +992,47 @@ final class CommandLineParser
             throw new InvalidArgumentException('--config expects NAME=VALUE with a non-empty name and value.');
         }
 
-        if (!preg_match('/^[A-Za-z0-9_.-]+$/', $name)) {
-            throw new InvalidArgumentException(sprintf('Invalid Redis config name: %s', $name));
+        return [RedisConfigDirectiveFormatter::normalizeName($name), $value];
+    }
+
+    /**
+     * @param list<string> $args
+     * @return list<array{0: string, 1: string}>
+     */
+    private function parseStartConfigDirectives(array $args): array
+    {
+        if ($args === []) {
+            return [];
         }
 
-        return [$name, $value];
+        if (count($args) % 2 !== 0) {
+            throw new InvalidArgumentException('Arguments after -- must be Redis config directive pairs: NAME VALUE.');
+        }
+
+        $directives = [];
+        for ($i = 0; $i < count($args); $i += 2) {
+            $directives[] = [
+                RedisConfigDirectiveFormatter::normalizeName($args[$i]),
+                $args[$i + 1],
+            ];
+        }
+
+        return $directives;
+    }
+
+    /**
+     * @param list<array{0: string, 1: string}> $directives
+     * @return list<string>
+     */
+    private function buildStartServerArgs(array $directives): array
+    {
+        $args = [];
+        foreach ($directives as [$name, $value]) {
+            $args[] = sprintf('--%s', $name);
+            $args[] = $value;
+        }
+
+        return $args;
     }
 
     /**
@@ -1009,7 +1051,7 @@ final class CommandLineParser
     private static function commandSynopsis(string $action): string
     {
         return match ($action) {
-            'start' => 'bin/manage-cluster start PORT [PORT ...] [--primaries N] [--replicas N] [--tls] [--gen-script PATH] [-- REDIS_SERVER_ARG ...]',
+            'start' => 'bin/manage-cluster start PORT [PORT ...] [--primaries N] [--replicas N] [--tls] [--gen-script PATH] [-- NAME VALUE ...]',
             'stop' => 'bin/manage-cluster stop PORT [PORT ...]',
             'kill' => 'bin/manage-cluster kill SEED_PORT [--replica PORT]',
             'rebalance' => 'bin/manage-cluster rebalance PORT [PORT ...]',

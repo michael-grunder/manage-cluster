@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 ### Added
+- Added persistence for `start -- NAME VALUE` Redis config directive pairs by
+  writing them into each generated `redis.conf` while still passing them to the
+  started server processes.
 - Added repeated `restart-replica --config NAME=VALUE` overrides that run
   `CONFIG SET` after restart and persist the result with `CONFIG REWRITE`.
 - Added `--replica PORT` to `kill` and `restart-replica` for noninteractive

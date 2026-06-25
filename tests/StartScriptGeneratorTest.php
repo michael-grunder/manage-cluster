@@ -33,6 +33,10 @@ final class StartScriptGeneratorTest extends TestCase
             watch: false,
             fill: null,
             chaos: null,
+            startConfigDirectives: [
+                ['save', ''],
+                ['enable-debug-command', 'local'],
+            ],
             startServerArgs: ['--save', '', '--enable-debug-command', 'local'],
         ));
 
@@ -44,6 +48,10 @@ final class StartScriptGeneratorTest extends TestCase
         self::assertStringContainsString('START_SERVER_ARGS=(', $script);
         self::assertStringContainsString("  '--save'", $script);
         self::assertStringContainsString("  ''", $script);
+        self::assertStringContainsString('START_CONFIG_LINES=(', $script);
+        self::assertStringContainsString("  'save \"\"'", $script);
+        self::assertStringContainsString("  'enable-debug-command local'", $script);
+        self::assertStringContainsString('for config_line in "${START_CONFIG_LINES[@]}"; do', $script);
         self::assertStringContainsString('cluster_create_command+=(--cluster create)', $script);
         self::assertStringContainsString('cluster_create_command+=(--cluster-replicas "$REPLICAS" --cluster-yes)', $script);
         self::assertStringContainsString('show_node_log_tail "$port"', $script);
@@ -74,6 +82,7 @@ final class StartScriptGeneratorTest extends TestCase
             watch: false,
             fill: null,
             chaos: null,
+            startConfigDirectives: [],
             startServerArgs: [],
         ));
     }
@@ -103,6 +112,7 @@ final class StartScriptGeneratorTest extends TestCase
             watch: false,
             fill: null,
             chaos: null,
+            startConfigDirectives: [],
             startServerArgs: [],
         ));
     }

@@ -106,6 +106,7 @@ final class ClusterManager
                     announceIp: $options->announceIp,
                     tls: $options->tls,
                     tlsMaterial: $tlsMaterial,
+                    startConfigDirectives: $options->startConfigDirectives,
                 );
 
                 $process = new Process([...[$options->redisBinary, $configPath], ...$options->startServerArgs]);
@@ -1739,6 +1740,7 @@ final class ClusterManager
 
     /**
      * @param array{ca_cert: string, server_cert: string, server_key: string}|null $tlsMaterial
+     * @param list<array{0: string, 1: string}> $startConfigDirectives
      */
     private function writeNodeConfiguration(
         string $clusterDir,
@@ -1746,6 +1748,7 @@ final class ClusterManager
         ?string $announceIp,
         bool $tls,
         ?array $tlsMaterial,
+        array $startConfigDirectives = [],
     ): string {
         $nodeDir = sprintf('%s/node-%d', $clusterDir, $port);
         if (!mkdir($concurrentDirectory = $nodeDir, 0o755, true) && !is_dir($concurrentDirectory)) {
@@ -1788,6 +1791,10 @@ final class ClusterManager
 
         if ($announceIp !== null && $announceIp !== '') {
             $lines[] = sprintf('cluster-announce-ip %s', $announceIp);
+        }
+
+        foreach ($startConfigDirectives as [$name, $value]) {
+            $lines[] = RedisConfigDirectiveFormatter::format($name, $value);
         }
 
         if (file_put_contents($configPath, implode(PHP_EOL, $lines) . PHP_EOL, LOCK_EX) === false) {
