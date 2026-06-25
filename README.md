@@ -20,9 +20,9 @@ cluster management.
 - Watch status continuously.
 - Flush primary nodes across one or more clusters.
 - Fill a cluster with synthetic data until primary memory reaches a target.
-- Interactively kill a selected primary or replica.
+- Kill an interactively selected primary/replica or a specific replica port.
 - Interactively add a replica to a selected primary.
-- Interactively restart a failed replica from saved node metadata.
+- Restart an interactively selected failed replica or a specific failed replica port from saved node metadata.
 - Run serialized replica-chaos loops that kill, restart, and add replicas while
   waiting for the cluster to converge between each step.
 - Start TLS-only local clusters with ephemeral certificates.
@@ -37,8 +37,8 @@ cluster management.
 - `redis-server` or `valkey-server`
 - `redis-cli`
 - `openssl` when using `--tls`
-- An interactive TTY for `kill`, `add-replica`, `restart-replica`, and the TUI
-  `status` view
+- An interactive TTY for `add-replica`, for `kill`/`restart-replica` when
+  `--replica` is omitted, and for the TUI `status` view
 
 ## Installation
 
@@ -235,14 +235,18 @@ Behavior notes:
 ### `kill`
 
 Opens an interactive tree view rooted at any cluster seed and shuts down the
-selected node.
+selected node, or shuts down a specific replica when `--replica PORT` is
+provided.
 
 ```bash
 bin/manage-cluster kill 7000
+bin/manage-cluster kill 7000 --replica 7002
 ```
 
 The picker shows primaries followed by their replicas. Navigation supports
 `↑`/`↓` or `j`/`k`, `Enter` to confirm, and `q` or `Esc` to cancel.
+When `--replica` is used, the port must be a replica in the discovered topology;
+invalid targets print the valid replicas grouped by primary.
 
 ### `add-replica`
 
@@ -269,12 +273,15 @@ Restarts a failed replica using its existing managed node config.
 
 ```bash
 bin/manage-cluster restart-replica 7000
+bin/manage-cluster restart-replica 7000 --replica 7002
 ```
 
 Behavior notes:
 
-- Requires an interactive TTY
-- Only failed replica rows are selectable
+- Requires an interactive TTY only when `--replica` is omitted
+- Only failed replicas can be restarted
+- Invalid `--replica` targets print the restartable failed replicas grouped by
+  primary
 
 ### `chaos`
 

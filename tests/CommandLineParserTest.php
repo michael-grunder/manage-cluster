@@ -108,6 +108,38 @@ final class CommandLineParserTest extends TestCase
         self::assertSame([7000], $options->ports);
     }
 
+    public function testParsesKillReplicaTarget(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'kill', '7000', '--replica', '7002']);
+
+        self::assertSame('kill', $options->action);
+        self::assertSame([7000], $options->ports);
+        self::assertSame(7002, $options->replicaPort);
+    }
+
+    public function testParsesRestartReplicaTarget(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'restart-replica', '7000', '--replica', '7002']);
+
+        self::assertSame('restart-replica', $options->action);
+        self::assertSame([7000], $options->ports);
+        self::assertSame(7002, $options->replicaPort);
+    }
+
+    public function testReplicaTargetIsRejectedForUnrelatedCommands(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--replica can only be used with kill or restart-replica.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--replica', '7002']);
+    }
+
     public function testParsesListActionWithoutPorts(): void
     {
         $parser = new CommandLineParser();

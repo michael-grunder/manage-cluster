@@ -320,21 +320,25 @@ final class ClusterManager
 
     public function kill(CommandLineOptions $options): void
     {
-        if (!$this->clusterTreeSelector->supportsInteractiveSelection()) {
-            throw new RuntimeException('kill needs an interactive TTY to choose a cluster node.');
-        }
-
         $seedPort = $options->ports[0];
         $metadata = $this->stateStore->findClusterByPort($seedPort);
         [$tls, $caCert, , $rawShards] = $this->resolveSeedConnectionContext($seedPort, $metadata);
         $shards = $this->clusterShardsParser->parse($rawShards);
 
-        $selectedNode = $this->clusterTreeSelector->select(
-            shards: $shards,
-            seedPort: $seedPort,
-            mode: ClusterTreeViewMode::AllNodes,
-            title: 'Select a cluster node to shut down',
-        );
+        if ($options->replicaPort !== null) {
+            $selectedNode = $this->resolveReplicaTarget($shards, $options->replicaPort, failedOnly: false);
+        } else {
+            if (!$this->clusterTreeSelector->supportsInteractiveSelection()) {
+                throw new RuntimeException('kill needs an interactive TTY to choose a cluster node, or --replica PORT for noninteractive use.');
+            }
+
+            $selectedNode = $this->clusterTreeSelector->select(
+                shards: $shards,
+                seedPort: $seedPort,
+                mode: ClusterTreeViewMode::AllNodes,
+                title: 'Select a cluster node to shut down',
+            );
+        }
 
         if (!$selectedNode instanceof ClusterNodeStatus) {
             throw new RuntimeException('Kill cancelled.');
@@ -677,10 +681,6 @@ final class ClusterManager
 
     public function restartReplica(CommandLineOptions $options): void
     {
-        if (!$this->clusterTreeSelector->supportsInteractiveSelection()) {
-            throw new RuntimeException('restart-replica needs an interactive TTY to choose a failed replica.');
-        }
-
         $seedPort = $options->ports[0];
         $metadata = $this->stateStore->findClusterByPort($seedPort);
         if (!is_array($metadata)) {
@@ -693,12 +693,20 @@ final class ClusterManager
         [$tls, $caCert, , $rawShards] = $this->resolveSeedConnectionContext($seedPort, $metadata);
         $shards = $this->clusterShardsParser->parse($rawShards);
 
-        $selectedReplica = $this->clusterTreeSelector->select(
-            shards: $shards,
-            seedPort: $seedPort,
-            mode: ClusterTreeViewMode::FailedReplicasOnly,
-            title: 'Select a failed replica to restart',
-        );
+        if ($options->replicaPort !== null) {
+            $selectedReplica = $this->resolveReplicaTarget($shards, $options->replicaPort, failedOnly: true);
+        } else {
+            if (!$this->clusterTreeSelector->supportsInteractiveSelection()) {
+                throw new RuntimeException('restart-replica needs an interactive TTY to choose a failed replica, or --replica PORT for noninteractive use.');
+            }
+
+            $selectedReplica = $this->clusterTreeSelector->select(
+                shards: $shards,
+                seedPort: $seedPort,
+                mode: ClusterTreeViewMode::FailedReplicasOnly,
+                title: 'Select a failed replica to restart',
+            );
+        }
 
         if (!$selectedReplica instanceof ClusterNodeStatus) {
             throw new RuntimeException('Replica restart cancelled.');
@@ -714,6 +722,81 @@ final class ClusterManager
 
         $this->restartReplicaPort($selectedReplica->port, $metadata, $options, $tls, $caCert);
         $this->output->success(sprintf('Replica %s restarted', $selectedReplica->address()));
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function resolveReplicaTarget(array $shards, int $replicaPort, bool $failedOnly): ClusterNodeStatus
+    {
+        foreach ($shards as $shard) {
+            if ($shard->master->port === $replicaPort) {
+                throw new RuntimeException(sprintf(
+                    "Port %d is a primary, not a replica.%s%s",
+                    $replicaPort,
+                    PHP_EOL,
+                    $this->formatReplicaTopology($shards, $failedOnly),
+                ));
+            }
+
+            foreach ($shard->replicas as $replica) {
+                if ($replica->port !== $replicaPort) {
+                    continue;
+                }
+
+                if ($replica->role !== 'replica') {
+                    throw new RuntimeException(sprintf(
+                        "Port %d is not a replica.%s%s",
+                        $replicaPort,
+                        PHP_EOL,
+                        $this->formatReplicaTopology($shards, $failedOnly),
+                    ));
+                }
+
+                if ($failedOnly && $replica->health !== 'fail') {
+                    throw new RuntimeException(sprintf(
+                        "Replica %d belongs to primary %d but is not in fail state.%s%s",
+                        $replicaPort,
+                        $shard->master->port,
+                        PHP_EOL,
+                        $this->formatReplicaTopology($shards, failedOnly: true),
+                    ));
+                }
+
+                return $replica;
+            }
+        }
+
+        throw new RuntimeException(sprintf(
+            "Port %d is not a replica in the cluster topology.%s%s",
+            $replicaPort,
+            PHP_EOL,
+            $this->formatReplicaTopology($shards, $failedOnly),
+        ));
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function formatReplicaTopology(array $shards, bool $failedOnly): string
+    {
+        $lines = [$failedOnly ? 'Restartable failed replicas by primary:' : 'Valid replicas by primary:'];
+
+        foreach ($shards as $shard) {
+            $replicas = [];
+            foreach ($shard->replicas as $replica) {
+                if ($failedOnly && $replica->health !== 'fail') {
+                    continue;
+                }
+
+                $health = $replica->health !== '' ? $replica->health : 'unknown';
+                $replicas[] = sprintf('%d (%s)', $replica->port, $health);
+            }
+
+            $lines[] = sprintf('  %d: %s', $shard->master->port, $replicas === [] ? 'none' : implode(', ', $replicas));
+        }
+
+        return implode(PHP_EOL, $lines);
     }
 
     public function chaos(CommandLineOptions $options): void

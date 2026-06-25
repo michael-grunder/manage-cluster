@@ -19,7 +19,7 @@ final class CommandLineParser
     private const array ACTION_SUMMARIES = [
         'start' => 'Start one local Redis Cluster from the given ports',
         'stop' => 'Stop every managed node in the cluster(s)',
-        'kill' => 'Interactively stop one primary or replica from a seed node',
+        'kill' => 'Stop one primary or replica from a seed node',
         'rebalance' => 'Rebalance slots across the selected cluster nodes',
         'status' => 'Show shard and node status for one cluster, or summarize all managed clusters',
         'list' => 'List managed clusters that appear to still be running',
@@ -50,6 +50,7 @@ final class CommandLineParser
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'kill' => [
+            ['--replica PORT', 'Replica port to stop without opening the picker'],
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'rebalance' => [
@@ -89,6 +90,7 @@ final class CommandLineParser
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'restart-replica' => [
+            ['--replica PORT', 'Failed replica port to restart without opening the picker'],
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'chaos' => [
@@ -125,6 +127,7 @@ final class CommandLineParser
         ],
         'kill' => [
             'bin/manage-cluster kill 7000',
+            'bin/manage-cluster kill 7000 --replica 7002',
         ],
         'rebalance' => [
             'bin/manage-cluster rebalance 7000',
@@ -154,6 +157,7 @@ final class CommandLineParser
         ],
         'restart-replica' => [
             'bin/manage-cluster restart-replica 7000',
+            'bin/manage-cluster restart-replica 7000 --replica 7002',
         ],
         'chaos' => [
             'bin/manage-cluster chaos 7000',
@@ -183,7 +187,7 @@ final class CommandLineParser
             'The CLI opens an interactive primary picker before attaching the new replica.',
         ],
         'restart-replica' => [
-            'The CLI only offers failed replicas that can be recovered from saved metadata.',
+            'The CLI only restarts failed replicas that can be recovered from saved metadata.',
         ],
         'chaos' => [
             'v1 focuses on serialized replica churn: kill, restart, and add.',
@@ -206,6 +210,7 @@ final class CommandLineParser
         $action = null;
         $portTokens = [];
         $replicaPort = null;
+        $replicaPortOption = null;
         $generatedScriptPath = null;
 
         $primaries = 3;
@@ -388,7 +393,19 @@ final class CommandLineParser
                     break;
 
                 case '--port':
+                    if ($replicaPortOption !== null) {
+                        throw new InvalidArgumentException(sprintf('%s and --port cannot be used together.', $replicaPortOption));
+                    }
                     $replicaPort = $this->parseIntOption($argv, ++$i, '--port');
+                    $replicaPortOption = '--port';
+                    break;
+
+                case '--replica':
+                    if ($replicaPortOption !== null) {
+                        throw new InvalidArgumentException(sprintf('%s and --replica cannot be used together.', $replicaPortOption));
+                    }
+                    $replicaPort = $this->parseIntOption($argv, ++$i, '--replica');
+                    $replicaPortOption = '--replica';
                     break;
 
                 default:
@@ -455,7 +472,8 @@ final class CommandLineParser
         }
 
         if ($replicaPort !== null && ($replicaPort < 1 || $replicaPort > 65535)) {
-            throw new InvalidArgumentException('--port must be a valid TCP port.');
+            $option = $replicaPortOption ?? '--port';
+            throw new InvalidArgumentException(sprintf('%s must be a valid TCP port.', $option));
         }
 
         if ($action !== 'fill' && $size !== null) {
@@ -522,8 +540,12 @@ final class CommandLineParser
             throw new InvalidArgumentException('--unsafe can only be used with chaos.');
         }
 
-        if ($action !== 'add-replica' && $replicaPort !== null) {
+        if ($replicaPortOption === '--port' && $action !== 'add-replica') {
             throw new InvalidArgumentException('--port can only be used with add-replica.');
+        }
+
+        if ($replicaPortOption === '--replica' && !in_array($action, ['kill', 'restart-replica'], true)) {
+            throw new InvalidArgumentException('--replica can only be used with kill or restart-replica.');
         }
 
         if ($action !== 'start' && $generatedScriptPath !== null) {
@@ -752,6 +774,7 @@ final class CommandLineParser
             '--keys' => true,
             '--pin-primary' => true,
             '--port' => true,
+            '--replica' => true,
             '--categories' => true,
             '--interval' => true,
             '--max-events' => true,
@@ -949,14 +972,14 @@ final class CommandLineParser
         return match ($action) {
             'start' => 'bin/manage-cluster start PORT [PORT ...] [--primaries N] [--replicas N] [--tls] [--gen-script PATH] [-- REDIS_SERVER_ARG ...]',
             'stop' => 'bin/manage-cluster stop PORT [PORT ...]',
-            'kill' => 'bin/manage-cluster kill PORT',
+            'kill' => 'bin/manage-cluster kill SEED_PORT [--replica PORT]',
             'rebalance' => 'bin/manage-cluster rebalance PORT [PORT ...]',
             'status' => 'bin/manage-cluster status [PORT] [--watch]',
             'list' => 'bin/manage-cluster list',
             'flush' => 'bin/manage-cluster flush PORT [PORT ...]',
             'fill' => 'bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]',
             'add-replica' => 'bin/manage-cluster add-replica SEED_PORT [--port PORT]',
-            'restart-replica' => 'bin/manage-cluster restart-replica SEED_PORT',
+            'restart-replica' => 'bin/manage-cluster restart-replica SEED_PORT [--replica PORT]',
             'chaos' => 'bin/manage-cluster chaos SEED_PORT [--categories LIST] [--interval SECONDS] [--max-events N] [--dry-run] [--watch]',
             default => 'bin/manage-cluster [OPTIONS] <COMMAND> [ARGS]',
         };

@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace Mgrunder\CreateCluster\Tests;
 
 use Mgrunder\CreateCluster\ClusterManager;
+use Mgrunder\CreateCluster\ClusterNodeStatus;
+use Mgrunder\CreateCluster\ClusterShardStatus;
 use Mgrunder\CreateCluster\PortRangeFormatter;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
+use RuntimeException;
 
 final class ClusterManagerTest extends TestCase
 {
@@ -68,6 +71,52 @@ final class ClusterManagerTest extends TestCase
         );
     }
 
+    public function testResolveReplicaTargetReturnsMatchingReplica(): void
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $method = $reflection->getMethod('resolveReplicaTarget');
+
+        $replica = $method->invoke($manager, $this->clusterShardsFixture(), 7002, false);
+
+        self::assertInstanceOf(ClusterNodeStatus::class, $replica);
+        self::assertSame(7002, $replica->port);
+    }
+
+    public function testResolveReplicaTargetRejectsPrimaryWithTopologyMessage(): void
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $method = $reflection->getMethod('resolveReplicaTarget');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage(<<<'MESSAGE'
+Port 7000 is a primary, not a replica.
+Valid replicas by primary:
+  7000: 7002 (fail), 7003 (online)
+  7001: 7004 (online)
+MESSAGE);
+
+        $method->invoke($manager, $this->clusterShardsFixture(), 7000, false);
+    }
+
+    public function testResolveReplicaTargetRejectsHealthyReplicaForRestart(): void
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $method = $reflection->getMethod('resolveReplicaTarget');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage(<<<'MESSAGE'
+Replica 7003 belongs to primary 7000 but is not in fail state.
+Restartable failed replicas by primary:
+  7000: 7002 (fail)
+  7001: none
+MESSAGE);
+
+        $method->invoke($manager, $this->clusterShardsFixture(), 7003, true);
+    }
+
     private function newClusterManagerWithoutConstructor(): ClusterManager
     {
         $reflection = new ReflectionClass(ClusterManager::class);
@@ -76,5 +125,44 @@ final class ClusterManagerTest extends TestCase
         $manager = $reflection->newInstanceWithoutConstructor();
 
         return $manager;
+    }
+
+    /**
+     * @return list<ClusterShardStatus>
+     */
+    private function clusterShardsFixture(): array
+    {
+        return [
+            new ClusterShardStatus(
+                slotStart: 0,
+                slotEnd: 8191,
+                master: $this->node(7000, 'master', 'online'),
+                replicas: [
+                    $this->node(7002, 'replica', 'fail'),
+                    $this->node(7003, 'replica', 'online'),
+                ],
+            ),
+            new ClusterShardStatus(
+                slotStart: 8192,
+                slotEnd: 16383,
+                master: $this->node(7001, 'master', 'online'),
+                replicas: [
+                    $this->node(7004, 'replica', 'online'),
+                ],
+            ),
+        ];
+    }
+
+    private function node(int $port, string $role, string $health): ClusterNodeStatus
+    {
+        return new ClusterNodeStatus(
+            id: str_pad((string) $port, 40, '0'),
+            ip: '127.0.0.1',
+            port: $port,
+            endpoint: '',
+            role: $role,
+            replicationOffset: 0,
+            health: $health,
+        );
     }
 }
