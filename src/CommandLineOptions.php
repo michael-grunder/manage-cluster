@@ -8,12 +8,14 @@ final readonly class CommandLineOptions
 {
     /**
      * @param list<int> $ports
+     * @param array<string, string> $restartConfigOverrides
      * @param list<string> $startServerArgs
      */
     public function __construct(
         public string $action,
         public array $ports,
         public ?int $replicaPort,
+        public array $restartConfigOverrides,
         public ?string $generatedScriptPath,
         public int $primaries,
         public int $replicas,

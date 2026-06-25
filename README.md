@@ -274,14 +274,19 @@ Restarts a failed replica using its existing managed node config.
 ```bash
 bin/manage-cluster restart-replica 7000
 bin/manage-cluster restart-replica 7000 --replica 7002
+bin/manage-cluster restart-replica 7000 --replica 7002 --config replica-serve-stale-data=no
 ```
 
 Behavior notes:
 
 - Requires an interactive TTY only when `--replica` is omitted
 - Only failed replicas can be restarted
+- Repeated `--config NAME=VALUE` options run `CONFIG SET` after the replica is
+  ready and then `CONFIG REWRITE` so the override is persisted in `redis.conf`
 - Invalid `--replica` targets print the restartable failed replicas grouped by
   primary
+- `kill` attempts `CONFIG REWRITE` before shutdown so runtime config changes are
+  preserved when Redis can rewrite the managed node config
 
 ### `chaos`
 

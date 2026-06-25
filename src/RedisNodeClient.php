@@ -187,6 +187,32 @@ final class RedisNodeClient
         return $dir;
     }
 
+    public function setConfig(int $port, bool $tls, ?string $caCert, string $name, string $value): void
+    {
+        $redis = $this->connectToNode($port, $tls, $caCert);
+
+        try {
+            $response = $redis->rawCommand('CONFIG', 'SET', $name, $value);
+        } finally {
+            $redis->close();
+        }
+
+        $this->assertOkResponse($response, sprintf('CONFIG SET %s', $name), $port);
+    }
+
+    public function rewriteConfig(int $port, bool $tls, ?string $caCert): void
+    {
+        $redis = $this->connectToNode($port, $tls, $caCert);
+
+        try {
+            $response = $redis->rawCommand('CONFIG', 'REWRITE');
+        } finally {
+            $redis->close();
+        }
+
+        $this->assertOkResponse($response, 'CONFIG REWRITE', $port);
+    }
+
     public function clusterMeet(int $port, bool $tls, ?string $caCert, string $host, int $meetPort): void
     {
         $redis = $this->connectToNode($port, $tls, $caCert);
@@ -345,6 +371,19 @@ final class RedisNodeClient
         }
 
         return $info;
+    }
+
+    private function assertOkResponse(mixed $response, string $command, int $port): void
+    {
+        if ($response === true) {
+            return;
+        }
+
+        if (is_string($response) && strtoupper($response) === 'OK') {
+            return;
+        }
+
+        throw new RuntimeException(sprintf('%s failed on Redis node at port %d.', $command, $port));
     }
 
     public function connectToNode(int $port, bool $tls, ?string $caCert): Redis

@@ -91,6 +91,7 @@ final class CommandLineParser
         ],
         'restart-replica' => [
             ['--replica PORT', 'Failed replica port to restart without opening the picker'],
+            ['--config NAME=VALUE', 'Apply and persist a Redis CONFIG SET override after restart; repeatable'],
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'chaos' => [
@@ -158,6 +159,7 @@ final class CommandLineParser
         'restart-replica' => [
             'bin/manage-cluster restart-replica 7000',
             'bin/manage-cluster restart-replica 7000 --replica 7002',
+            'bin/manage-cluster restart-replica 7000 --replica 7002 --config replica-serve-stale-data=no',
         ],
         'chaos' => [
             'bin/manage-cluster chaos 7000',
@@ -212,6 +214,8 @@ final class CommandLineParser
         $replicaPort = null;
         $replicaPortOption = null;
         $generatedScriptPath = null;
+        $restartConfigOverrides = [];
+        $restartConfigOverrideProvided = false;
 
         $primaries = 3;
         $primariesProvided = false;
@@ -408,6 +412,12 @@ final class CommandLineParser
                     $replicaPortOption = '--replica';
                     break;
 
+                case '--config':
+                    [$name, $value] = $this->parseConfigOverride($this->parseStringOption($argv, ++$i, '--config'));
+                    $restartConfigOverrides[$name] = $value;
+                    $restartConfigOverrideProvided = true;
+                    break;
+
                 default:
                     if (str_starts_with($arg, '-')) {
                         throw new InvalidArgumentException(sprintf('Unknown option: %s', $arg));
@@ -548,6 +558,10 @@ final class CommandLineParser
             throw new InvalidArgumentException('--replica can only be used with kill or restart-replica.');
         }
 
+        if ($action !== 'restart-replica' && $restartConfigOverrideProvided) {
+            throw new InvalidArgumentException('--config can only be used with restart-replica.');
+        }
+
         if ($action !== 'start' && $generatedScriptPath !== null) {
             throw new InvalidArgumentException('--gen-script can only be used with start.');
         }
@@ -662,6 +676,7 @@ final class CommandLineParser
             action: $action,
             ports: $ports,
             replicaPort: $replicaPort,
+            restartConfigOverrides: $restartConfigOverrides,
             generatedScriptPath: $generatedScriptPath,
             primaries: $primaries,
             replicas: $replicas,
@@ -782,6 +797,7 @@ final class CommandLineParser
             '--seed' => true,
             '--wait-timeout' => true,
             '--cooldown' => true,
+            '--config' => true,
         ];
 
         for ($i = 1; $i < count($argv); $i++) {
@@ -955,6 +971,29 @@ final class CommandLineParser
     }
 
     /**
+     * @return array{0: string, 1: string}
+     */
+    private function parseConfigOverride(string $raw): array
+    {
+        $separator = strpos($raw, '=');
+        if ($separator === false) {
+            throw new InvalidArgumentException('--config expects NAME=VALUE.');
+        }
+
+        $name = trim(substr($raw, 0, $separator));
+        $value = substr($raw, $separator + 1);
+        if ($name === '' || $value === '') {
+            throw new InvalidArgumentException('--config expects NAME=VALUE with a non-empty name and value.');
+        }
+
+        if (!preg_match('/^[A-Za-z0-9_.-]+$/', $name)) {
+            throw new InvalidArgumentException(sprintf('Invalid Redis config name: %s', $name));
+        }
+
+        return [$name, $value];
+    }
+
+    /**
      * @return list<array{0:string,1:string}>
      */
     private static function globalOptions(): array
@@ -979,7 +1018,7 @@ final class CommandLineParser
             'flush' => 'bin/manage-cluster flush PORT [PORT ...]',
             'fill' => 'bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]',
             'add-replica' => 'bin/manage-cluster add-replica SEED_PORT [--port PORT]',
-            'restart-replica' => 'bin/manage-cluster restart-replica SEED_PORT [--replica PORT]',
+            'restart-replica' => 'bin/manage-cluster restart-replica SEED_PORT [--replica PORT] [--config NAME=VALUE]',
             'chaos' => 'bin/manage-cluster chaos SEED_PORT [--categories LIST] [--interval SECONDS] [--max-events N] [--dry-run] [--watch]',
             default => 'bin/manage-cluster [OPTIONS] <COMMAND> [ARGS]',
         };

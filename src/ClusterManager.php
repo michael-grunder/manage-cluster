@@ -345,6 +345,7 @@ final class ClusterManager
         }
 
         $this->output->step(sprintf('Sending SHUTDOWN to %s', $selectedNode->address()));
+        $this->persistRuntimeConfigBeforeShutdown($selectedNode->port, $tls, $caCert);
         $this->redisNodeClient->shutdown($selectedNode->port, $tls, $caCert);
         $this->systemInspector->waitForPortsToClose([$selectedNode->port]);
         $this->persistClusterMetadataPortRemoval($metadata, $selectedNode->port);
@@ -1015,7 +1016,39 @@ final class ClusterManager
         $this->output->step(sprintf('Restarting failed replica %d', $port));
         $this->runProcess([$redisBinary, $configPath]);
         $this->redisNodeClient->waitForReady($port, $tls, $caCert);
+        $this->applyRestartConfigOverrides($port, $options->restartConfigOverrides, $tls, $caCert);
         $this->output->success(sprintf('Replica %d restarted using %s', $port, basename($configPath)));
+    }
+
+    private function persistRuntimeConfigBeforeShutdown(int $port, bool $tls, ?string $caCert): void
+    {
+        try {
+            $this->redisNodeClient->rewriteConfig($port, $tls, $caCert);
+        } catch (\Throwable $exception) {
+            $this->output->warning(sprintf(
+                'CONFIG REWRITE failed on port %d; runtime config changes may not persist: %s',
+                $port,
+                $exception->getMessage(),
+            ));
+        }
+    }
+
+    /**
+     * @param array<string, string> $overrides
+     */
+    private function applyRestartConfigOverrides(int $port, array $overrides, bool $tls, ?string $caCert): void
+    {
+        if ($overrides === []) {
+            return;
+        }
+
+        $this->output->step(sprintf('Applying %d Redis config override%s', count($overrides), count($overrides) === 1 ? '' : 's'));
+        foreach ($overrides as $name => $value) {
+            $this->redisNodeClient->setConfig($port, $tls, $caCert, $name, $value);
+        }
+
+        $this->redisNodeClient->rewriteConfig($port, $tls, $caCert);
+        $this->output->success(sprintf('Redis config overrides persisted for replica %d', $port));
     }
 
     /**
@@ -1341,6 +1374,7 @@ final class ClusterManager
                 }
 
                 $this->output->step(sprintf('Stopping replica %d', $event->targetPort));
+                $this->persistRuntimeConfigBeforeShutdown($event->targetPort, $tls, $caCert);
                 $this->redisNodeClient->shutdown($event->targetPort, $tls, $caCert);
                 $this->systemInspector->waitForPortsToClose([$event->targetPort]);
                 break;

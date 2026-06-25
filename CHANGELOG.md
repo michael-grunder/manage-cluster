@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 ### Added
+- Added repeated `restart-replica --config NAME=VALUE` overrides that run
+  `CONFIG SET` after restart and persist the result with `CONFIG REWRITE`.
 - Added `--replica PORT` to `kill` and `restart-replica` for noninteractive
   targeting of a specific existing replica, with topology-aware validation
   messages that list valid replicas grouped by primary.
@@ -93,6 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed the redundant `Makefile`; PHAR builds now go through `composer build-phar`.
 
 ### Fixed
+- Fixed replica runtime config changes being lost across `kill` plus
+  `restart-replica` by attempting `CONFIG REWRITE` before shutdown.
 - Fixed `bin/build-phar` so `composer build-phar` works after `composer install --no-dev` even when Composer omits optional metadata files such as `vendor/composer/autoload_files.php`.
 - Added defensive start-time checks for occupied ports and cluster shape validation before node launch.
 - Fixed the initial `status --watch` draw so fullscreen TUI mode clears stale terminal content before rendering the first frame.

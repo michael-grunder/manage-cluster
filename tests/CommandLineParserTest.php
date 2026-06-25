@@ -130,6 +130,29 @@ final class CommandLineParserTest extends TestCase
         self::assertSame(7002, $options->replicaPort);
     }
 
+    public function testParsesRestartReplicaConfigOverrides(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse([
+            'bin/manage-cluster',
+            'restart-replica',
+            '7000',
+            '--replica',
+            '7002',
+            '--config',
+            'replica-serve-stale-data=no',
+            '--config',
+            'loglevel=debug',
+        ]);
+
+        self::assertSame('restart-replica', $options->action);
+        self::assertSame([
+            'replica-serve-stale-data' => 'no',
+            'loglevel' => 'debug',
+        ], $options->restartConfigOverrides);
+    }
+
     public function testReplicaTargetIsRejectedForUnrelatedCommands(): void
     {
         $parser = new CommandLineParser();
@@ -138,6 +161,36 @@ final class CommandLineParserTest extends TestCase
         $this->expectExceptionMessage('--replica can only be used with kill or restart-replica.');
 
         $parser->parse(['bin/manage-cluster', 'status', '7000', '--replica', '7002']);
+    }
+
+    public function testConfigOverrideIsRejectedForUnrelatedCommands(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--config can only be used with restart-replica.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--config', 'replica-serve-stale-data=no']);
+    }
+
+    public function testConfigOverrideRequiresNameValuePair(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--config expects NAME=VALUE.');
+
+        $parser->parse(['bin/manage-cluster', 'restart-replica', '7000', '--config', 'replica-serve-stale-data']);
+    }
+
+    public function testConfigOverrideRejectsInvalidName(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid Redis config name: replica serve stale data');
+
+        $parser->parse(['bin/manage-cluster', 'restart-replica', '7000', '--config', 'replica serve stale data=no']);
     }
 
     public function testParsesListActionWithoutPorts(): void
