@@ -250,6 +250,7 @@ provided.
 ```bash
 bin/manage-cluster kill 7000
 bin/manage-cluster kill 7000 --replica 7002
+bin/manage-cluster kill 7000 --replica 7002 --method sigsegv
 bin/manage-cluster kill 7000 --primary 7000 --replica 7002
 bin/manage-cluster kill 7000 --all --wait
 bin/manage-cluster kill 7000 --primary 7000 --all --wait
@@ -264,6 +265,10 @@ Use `--all` to shut down every replica in the cluster, or combine it with
 `--primary PORT` to shut down every replica attached to that primary. Add
 `--wait` when targeting replicas to keep the command running until Redis cluster
 state reports each stopped replica as down.
+Use `--method METHOD` to choose how targets are terminated. `shutdown` is the
+default, `nosave` sends `SHUTDOWN NOSAVE`, and `sigterm`, `sigquit`, `sigsegv`,
+`sigkill`, `sigabrt`, or `sigbus` send that process signal to the managed Redis
+process from saved node metadata.
 
 ### `add-replica`
 

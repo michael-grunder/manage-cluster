@@ -54,6 +54,7 @@ final class CommandLineParser
             ['--primary PORT', 'Require --replica or --all targets to belong to this primary'],
             ['--all', 'Stop every replica, or every replica under --primary PORT'],
             ['--wait', 'Wait until Redis cluster state reports stopped replica targets as down'],
+            ['--method METHOD', 'shutdown, nosave, or sigterm/sigquit/sigsegv/sigkill/sigabrt/sigbus'],
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'rebalance' => [
@@ -136,6 +137,7 @@ final class CommandLineParser
         'kill' => [
             'bin/manage-cluster kill 7000',
             'bin/manage-cluster kill 7000 --replica 7002',
+            'bin/manage-cluster kill 7000 --replica 7002 --method sigsegv',
             'bin/manage-cluster kill 7000 --primary 7000 --replica 7002',
             'bin/manage-cluster kill 7000 --all --wait',
             'bin/manage-cluster kill 7000 --primary 7000 --all --wait',
@@ -234,6 +236,8 @@ final class CommandLineParser
         $restartConfigOverrideProvided = false;
         $all = false;
         $wait = false;
+        $killMethod = KillMethod::Shutdown;
+        $killMethodProvided = false;
 
         $primaries = 3;
         $primariesProvided = false;
@@ -351,6 +355,11 @@ final class CommandLineParser
 
                 case '--wait':
                     $wait = true;
+                    break;
+
+                case '--method':
+                    $killMethod = KillMethod::parse($this->parseStringOption($argv, ++$i, '--method'));
+                    $killMethodProvided = true;
                     break;
 
                 case '--categories':
@@ -497,6 +506,10 @@ final class CommandLineParser
 
         if ($wait && !in_array($action, ['kill', 'restart-replica'], true)) {
             throw new InvalidArgumentException('--wait can only be used with kill or restart-replica.');
+        }
+
+        if ($action !== 'kill' && $killMethodProvided) {
+            throw new InvalidArgumentException('--method can only be used with kill.');
         }
 
         if ($startServerArgs !== [] && $action !== 'start') {
@@ -752,6 +765,7 @@ final class CommandLineParser
             startServerArgs: $startServerArgs,
             all: $all,
             wait: $wait,
+            killMethod: $killMethod,
         );
     }
 
@@ -1117,7 +1131,7 @@ final class CommandLineParser
         return match ($action) {
             'start' => 'bin/manage-cluster start PORT [PORT ...] [--primaries N] [--replicas N] [--tls] [--gen-script PATH] [-- NAME VALUE ...]',
             'stop' => 'bin/manage-cluster stop PORT [PORT ...]',
-            'kill' => 'bin/manage-cluster kill SEED_PORT [--replica PORT] [--primary PORT] [--all] [--wait]',
+            'kill' => 'bin/manage-cluster kill SEED_PORT [--replica PORT] [--primary PORT] [--all] [--wait] [--method METHOD]',
             'rebalance' => 'bin/manage-cluster rebalance PORT [PORT ...]',
             'status' => 'bin/manage-cluster status [PORT] [--watch]',
             'list' => 'bin/manage-cluster list',

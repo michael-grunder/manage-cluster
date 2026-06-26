@@ -6,6 +6,7 @@ namespace Mgrunder\CreateCluster\Tests;
 
 use InvalidArgumentException;
 use Mgrunder\CreateCluster\CommandLineParser;
+use Mgrunder\CreateCluster\KillMethod;
 use PHPUnit\Framework\TestCase;
 
 final class CommandLineParserTest extends TestCase
@@ -106,6 +107,7 @@ final class CommandLineParserTest extends TestCase
 
         self::assertSame('kill', $options->action);
         self::assertSame([7000], $options->ports);
+        self::assertSame(KillMethod::Shutdown, $options->killMethod);
     }
 
     public function testParsesKillReplicaTarget(): void
@@ -117,6 +119,26 @@ final class CommandLineParserTest extends TestCase
         self::assertSame('kill', $options->action);
         self::assertSame([7000], $options->ports);
         self::assertSame(7002, $options->replicaPort);
+    }
+
+    public function testParsesKillNosaveMethod(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'kill', '7000', '--replica', '7002', '--method', 'nosave']);
+
+        self::assertSame('kill', $options->action);
+        self::assertSame(KillMethod::NoSave, $options->killMethod);
+    }
+
+    public function testParsesKillSignalMethod(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'kill', '7000', '--replica', '7002', '--method', 'sigsegv']);
+
+        self::assertSame('kill', $options->action);
+        self::assertSame(KillMethod::SigSegv, $options->killMethod);
     }
 
     public function testParsesKillReplicaTargetWithPrimaryConstraint(): void
@@ -736,6 +758,26 @@ final class CommandLineParserTest extends TestCase
         $this->expectExceptionMessage('--categories can only be used with chaos.');
 
         $parser->parse(['bin/manage-cluster', 'status', '7000', '--categories', 'replica-kill']);
+    }
+
+    public function testMethodOptionIsRejectedOutsideKill(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--method can only be used with kill.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--method', 'sigterm']);
+    }
+
+    public function testKillRejectsUnknownMethod(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unsupported kill method: sigusr1');
+
+        $parser->parse(['bin/manage-cluster', 'kill', '7000', '--method', 'sigusr1']);
     }
 
     public function testChaosRejectsUnknownCategory(): void

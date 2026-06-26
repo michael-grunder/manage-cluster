@@ -35,6 +35,7 @@ final readonly class CommandLineOptions
         public array $startServerArgs,
         public bool $all = false,
         public bool $wait = false,
+        public KillMethod $killMethod = KillMethod::Shutdown,
     ) {
     }
 }

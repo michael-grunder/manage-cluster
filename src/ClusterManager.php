@@ -329,7 +329,7 @@ final class ClusterManager
 
         if ($options->all) {
             $targets = $this->resolveReplicaTargets($shards, failedOnly: false, primaryPort: $options->primaryPort);
-            $this->shutdownReplicaTargets($targets, $tls, $caCert);
+            $this->killReplicaTargets($targets, $options->killMethod, $tls, $caCert, $metadata);
             if ($options->wait) {
                 $this->waitForReplicaTargetsClusterState(
                     seedPort: $this->selectReplicaStateWaitSeedPort($seedPort, $shards, $targets),
@@ -343,7 +343,8 @@ final class ClusterManager
             $this->persistClusterMetadataPortRemovals($metadata, $this->replicaTargetPorts($targets));
 
             $this->output->success(sprintf(
-                'Stopped replica%s %s',
+                '%s replica%s %s',
+                $options->killMethod->completionVerb(),
                 count($targets) === 1 ? '' : 's',
                 $this->formatReplicaTargetList($targets),
             ));
@@ -375,9 +376,8 @@ final class ClusterManager
             throw new RuntimeException('--wait can only be used when kill targets replicas.');
         }
 
-        $this->output->step(sprintf('Sending SHUTDOWN to %s', $selectedNode->address()));
-        $this->persistRuntimeConfigBeforeShutdown($selectedNode->port, $tls, $caCert);
-        $this->redisNodeClient->shutdown($selectedNode->port, $tls, $caCert);
+        $this->output->step(sprintf('Sending %s to %s', $options->killMethod->commandLabel(), $selectedNode->address()));
+        $this->killNode($selectedNode, $options->killMethod, $tls, $caCert, $metadata);
         $this->systemInspector->waitForPortsToClose([$selectedNode->port]);
 
         if ($options->wait) {
@@ -392,7 +392,7 @@ final class ClusterManager
         }
 
         $this->persistClusterMetadataPortRemoval($metadata, $selectedNode->port);
-        $this->output->success(sprintf('Stopped cluster node %s', $selectedNode->address()));
+        $this->output->success(sprintf('%s cluster node %s', $options->killMethod->completionVerb(), $selectedNode->address()));
     }
 
     public function status(CommandLineOptions $options): void
@@ -939,25 +939,98 @@ final class ClusterManager
 
     /**
      * @param list<ReplicaTarget> $targets
+     * @param array<string, mixed>|null $metadata
      */
-    private function shutdownReplicaTargets(array $targets, bool $tls, ?string $caCert): void
+    private function killReplicaTargets(array $targets, KillMethod $method, bool $tls, ?string $caCert, ?array $metadata): void
     {
         $ports = $this->replicaTargetPorts($targets);
         $this->output->step(sprintf(
-            'Sending SHUTDOWN to replica%s %s',
+            'Sending %s to replica%s %s',
+            $method->commandLabel(),
             count($ports) === 1 ? '' : 's',
             $this->formatCompactPortList($ports),
         ));
 
-        foreach ($targets as $target) {
-            $this->persistRuntimeConfigBeforeShutdown($target->replica->port, $tls, $caCert);
-        }
+        if ($method->isSignal()) {
+            $this->sendKillSignalToPorts($ports, $method, $metadata);
+        } else {
+            foreach ($targets as $target) {
+                $this->persistRuntimeConfigBeforeShutdown($target->replica->port, $tls, $caCert);
+            }
 
-        foreach ($targets as $target) {
-            $this->redisNodeClient->shutdown($target->replica->port, $tls, $caCert);
+            foreach ($targets as $target) {
+                $this->redisNodeClient->shutdown($target->replica->port, $tls, $caCert, $method->shutdownNoSave());
+            }
         }
 
         $this->systemInspector->waitForPortsToClose($ports);
+    }
+
+    /**
+     * @param array<string, mixed>|null $metadata
+     */
+    private function killNode(ClusterNodeStatus $node, KillMethod $method, bool $tls, ?string $caCert, ?array $metadata): void
+    {
+        if ($method->isSignal()) {
+            $this->sendKillSignalToPorts([$node->port], $method, $metadata);
+
+            return;
+        }
+
+        $this->persistRuntimeConfigBeforeShutdown($node->port, $tls, $caCert);
+        $this->redisNodeClient->shutdown($node->port, $tls, $caCert, $method->shutdownNoSave());
+    }
+
+    /**
+     * @param list<int> $ports
+     * @param array<string, mixed>|null $metadata
+     */
+    private function sendKillSignalToPorts(array $ports, KillMethod $method, ?array $metadata): void
+    {
+        $portPidMap = $this->resolveManagedPidsForPorts($ports, $method, $metadata);
+        foreach ($portPidMap as $pid) {
+            if (!$this->systemInspector->sendSignal($pid, $method->signalNumber(), $method->signalName())) {
+                throw new RuntimeException(sprintf('Failed to send SIG%s to pid %d.', $method->signalName(), $pid));
+            }
+        }
+
+        $this->output->warning(sprintf(
+            'Sent SIG%s to ports %s (%s)',
+            $method->signalName(),
+            $this->formatCompactPortList(array_map('intval', array_keys($portPidMap))),
+            $this->formatPidList($portPidMap),
+        ));
+    }
+
+    /**
+     * @param list<int> $ports
+     * @param array<string, mixed>|null $metadata
+     * @return array<int, int>
+     */
+    private function resolveManagedPidsForPorts(array $ports, KillMethod $method, ?array $metadata): array
+    {
+        $clusterDir = is_array($metadata) && is_string($metadata['cluster_dir'] ?? null) ? $metadata['cluster_dir'] : null;
+        if ($clusterDir === null) {
+            throw new RuntimeException(sprintf('--method %s requires managed cluster metadata with node pid files.', $method->value));
+        }
+
+        $portPidMap = [];
+        foreach ($ports as $port) {
+            $pid = $this->readNodePid($clusterDir, $port);
+            if ($pid === null) {
+                throw new RuntimeException(sprintf('--method %s requires a pid file for managed port %d.', $method->value, $port));
+            }
+
+            if (!$this->systemInspector->isProcessRunning($pid)) {
+                throw new RuntimeException(sprintf('Managed pid %d for port %d is not running.', $pid, $port));
+            }
+
+            $portPidMap[$port] = $pid;
+        }
+
+        ksort($portPidMap, SORT_NUMERIC);
+
+        return $portPidMap;
     }
 
     /**

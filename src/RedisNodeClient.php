@@ -136,7 +136,7 @@ final class RedisNodeClient
         return $result;
     }
 
-    public function shutdown(int $port, bool $tls, ?string $caCert): void
+    public function shutdown(int $port, bool $tls, ?string $caCert, bool $noSave = true): void
     {
         try {
             $redis = $this->connectToNode($port, $tls, $caCert);
@@ -145,7 +145,11 @@ final class RedisNodeClient
         }
 
         try {
-            $redis->rawCommand('SHUTDOWN', 'NOSAVE');
+            if ($noSave) {
+                $redis->rawCommand('SHUTDOWN', 'NOSAVE');
+            } else {
+                $redis->rawCommand('SHUTDOWN');
+            }
         } catch (RedisException) {
             // SHUTDOWN closes the connection by design.
         }
