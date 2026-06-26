@@ -51,6 +51,7 @@ final class CommandLineParser
         ],
         'kill' => [
             ['--replica PORT', 'Replica port to stop without opening the picker'],
+            ['--primary PORT', 'Require --replica to belong to this primary'],
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'rebalance' => [
@@ -91,6 +92,7 @@ final class CommandLineParser
         ],
         'restart-replica' => [
             ['--replica PORT', 'Failed replica port to restart without opening the picker'],
+            ['--primary PORT', 'Require --replica to belong to this primary'],
             ['--config NAME=VALUE', 'Apply and persist a Redis CONFIG SET override after restart; repeatable'],
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
@@ -130,6 +132,7 @@ final class CommandLineParser
         'kill' => [
             'bin/manage-cluster kill 7000',
             'bin/manage-cluster kill 7000 --replica 7002',
+            'bin/manage-cluster kill 7000 --primary 7000 --replica 7002',
         ],
         'rebalance' => [
             'bin/manage-cluster rebalance 7000',
@@ -160,6 +163,7 @@ final class CommandLineParser
         'restart-replica' => [
             'bin/manage-cluster restart-replica 7000',
             'bin/manage-cluster restart-replica 7000 --replica 7002',
+            'bin/manage-cluster restart-replica 7000 --primary 7000 --replica 7002',
             'bin/manage-cluster restart-replica 7000 --replica 7002 --config replica-serve-stale-data=no',
         ],
         'chaos' => [
@@ -215,6 +219,7 @@ final class CommandLineParser
         $portTokens = [];
         $replicaPort = null;
         $replicaPortOption = null;
+        $primaryPort = null;
         $generatedScriptPath = null;
         $restartConfigOverrides = [];
         $restartConfigOverrideProvided = false;
@@ -414,6 +419,10 @@ final class CommandLineParser
                     $replicaPortOption = '--replica';
                     break;
 
+                case '--primary':
+                    $primaryPort = $this->parseIntOption($argv, ++$i, '--primary');
+                    break;
+
                 case '--config':
                     [$name, $value] = $this->parseConfigOverride($this->parseStringOption($argv, ++$i, '--config'));
                     $restartConfigOverrides[$name] = $value;
@@ -491,6 +500,10 @@ final class CommandLineParser
             throw new InvalidArgumentException(sprintf('%s must be a valid TCP port.', $option));
         }
 
+        if ($primaryPort !== null && ($primaryPort < 1 || $primaryPort > 65535)) {
+            throw new InvalidArgumentException('--primary must be a valid TCP port.');
+        }
+
         if ($action !== 'fill' && $size !== null) {
             throw new InvalidArgumentException('--size can only be used with fill.');
         }
@@ -561,6 +574,14 @@ final class CommandLineParser
 
         if ($replicaPortOption === '--replica' && !in_array($action, ['kill', 'restart-replica'], true)) {
             throw new InvalidArgumentException('--replica can only be used with kill or restart-replica.');
+        }
+
+        if ($primaryPort !== null && !in_array($action, ['kill', 'restart-replica'], true)) {
+            throw new InvalidArgumentException('--primary can only be used with kill or restart-replica.');
+        }
+
+        if ($primaryPort !== null && $replicaPortOption !== '--replica') {
+            throw new InvalidArgumentException('--primary requires --replica.');
         }
 
         if ($action !== 'restart-replica' && $restartConfigOverrideProvided) {
@@ -681,6 +702,7 @@ final class CommandLineParser
             action: $action,
             ports: $ports,
             replicaPort: $replicaPort,
+            primaryPort: $primaryPort,
             restartConfigOverrides: $restartConfigOverrides,
             generatedScriptPath: $generatedScriptPath,
             primaries: $primaries,
@@ -796,6 +818,7 @@ final class CommandLineParser
             '--pin-primary' => true,
             '--port' => true,
             '--replica' => true,
+            '--primary' => true,
             '--categories' => true,
             '--interval' => true,
             '--max-events' => true,
@@ -1053,14 +1076,14 @@ final class CommandLineParser
         return match ($action) {
             'start' => 'bin/manage-cluster start PORT [PORT ...] [--primaries N] [--replicas N] [--tls] [--gen-script PATH] [-- NAME VALUE ...]',
             'stop' => 'bin/manage-cluster stop PORT [PORT ...]',
-            'kill' => 'bin/manage-cluster kill SEED_PORT [--replica PORT]',
+            'kill' => 'bin/manage-cluster kill SEED_PORT [--replica PORT] [--primary PORT]',
             'rebalance' => 'bin/manage-cluster rebalance PORT [PORT ...]',
             'status' => 'bin/manage-cluster status [PORT] [--watch]',
             'list' => 'bin/manage-cluster list',
             'flush' => 'bin/manage-cluster flush PORT [PORT ...]',
             'fill' => 'bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]',
             'add-replica' => 'bin/manage-cluster add-replica SEED_PORT [--port PORT]',
-            'restart-replica' => 'bin/manage-cluster restart-replica SEED_PORT [--replica PORT] [--config NAME=VALUE]',
+            'restart-replica' => 'bin/manage-cluster restart-replica SEED_PORT [--replica PORT] [--primary PORT] [--config NAME=VALUE]',
             'chaos' => 'bin/manage-cluster chaos SEED_PORT [--categories LIST] [--interval SECONDS] [--max-events N] [--dry-run] [--watch]',
             default => 'bin/manage-cluster [OPTIONS] <COMMAND> [ARGS]',
         };

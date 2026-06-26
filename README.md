@@ -246,11 +246,13 @@ provided.
 ```bash
 bin/manage-cluster kill 7000
 bin/manage-cluster kill 7000 --replica 7002
+bin/manage-cluster kill 7000 --primary 7000 --replica 7002
 ```
 
 The picker shows primaries followed by their replicas. Navigation supports
 `↑`/`↓` or `j`/`k`, `Enter` to confirm, and `q` or `Esc` to cancel.
-When `--replica` is used, the port must be a replica in the discovered topology;
+When `--replica` is used, the port must be a replica in the discovered topology.
+Add `--primary PORT` to ensure that replica belongs to the expected primary;
 invalid targets print the valid replicas grouped by primary.
 
 ### `add-replica`
@@ -279,6 +281,7 @@ Restarts a failed replica using its existing managed node config.
 ```bash
 bin/manage-cluster restart-replica 7000
 bin/manage-cluster restart-replica 7000 --replica 7002
+bin/manage-cluster restart-replica 7000 --primary 7000 --replica 7002
 bin/manage-cluster restart-replica 7000 --replica 7002 --config replica-serve-stale-data=no
 ```
 
@@ -286,6 +289,8 @@ Behavior notes:
 
 - Requires an interactive TTY only when `--replica` is omitted
 - Only failed replicas can be restarted
+- Add `--primary PORT` to ensure the failed replica belongs to the expected
+  primary before restarting it
 - Repeated `--config NAME=VALUE` options run `CONFIG SET` after the replica is
   ready and then `CONFIG REWRITE` so the override is persisted in `redis.conf`
 - Invalid `--replica` targets print the restartable failed replicas grouped by

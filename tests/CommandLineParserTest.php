@@ -119,6 +119,18 @@ final class CommandLineParserTest extends TestCase
         self::assertSame(7002, $options->replicaPort);
     }
 
+    public function testParsesKillReplicaTargetWithPrimaryConstraint(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'kill', '7000', '--primary', '7000', '--replica', '7002']);
+
+        self::assertSame('kill', $options->action);
+        self::assertSame([7000], $options->ports);
+        self::assertSame(7002, $options->replicaPort);
+        self::assertSame(7000, $options->primaryPort);
+    }
+
     public function testParsesRestartReplicaTarget(): void
     {
         $parser = new CommandLineParser();
@@ -128,6 +140,18 @@ final class CommandLineParserTest extends TestCase
         self::assertSame('restart-replica', $options->action);
         self::assertSame([7000], $options->ports);
         self::assertSame(7002, $options->replicaPort);
+    }
+
+    public function testParsesRestartReplicaTargetWithPrimaryConstraint(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'restart-replica', '7000', '--primary', '7000', '--replica', '7002']);
+
+        self::assertSame('restart-replica', $options->action);
+        self::assertSame([7000], $options->ports);
+        self::assertSame(7002, $options->replicaPort);
+        self::assertSame(7000, $options->primaryPort);
     }
 
     public function testParsesRestartReplicaConfigOverrides(): void
@@ -161,6 +185,26 @@ final class CommandLineParserTest extends TestCase
         $this->expectExceptionMessage('--replica can only be used with kill or restart-replica.');
 
         $parser->parse(['bin/manage-cluster', 'status', '7000', '--replica', '7002']);
+    }
+
+    public function testPrimaryConstraintIsRejectedForUnrelatedCommands(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--primary can only be used with kill or restart-replica.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--primary', '7000']);
+    }
+
+    public function testPrimaryConstraintRequiresReplicaTarget(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--primary requires --replica.');
+
+        $parser->parse(['bin/manage-cluster', 'kill', '7000', '--primary', '7000']);
     }
 
     public function testConfigOverrideIsRejectedForUnrelatedCommands(): void

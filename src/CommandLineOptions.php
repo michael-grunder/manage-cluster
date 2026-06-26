@@ -16,6 +16,7 @@ final readonly class CommandLineOptions
         public string $action,
         public array $ports,
         public ?int $replicaPort,
+        public ?int $primaryPort,
         public array $restartConfigOverrides,
         public ?string $generatedScriptPath,
         public int $primaries,

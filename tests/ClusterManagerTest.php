@@ -83,6 +83,34 @@ final class ClusterManagerTest extends TestCase
         self::assertSame(7002, $replica->port);
     }
 
+    public function testResolveReplicaTargetReturnsReplicaWhenPrimaryMatches(): void
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $method = $reflection->getMethod('resolveReplicaTarget');
+
+        $replica = $method->invoke($manager, $this->clusterShardsFixture(), 7002, false, 7000);
+
+        self::assertInstanceOf(ClusterNodeStatus::class, $replica);
+        self::assertSame(7002, $replica->port);
+    }
+
+    public function testResolveReplicaTargetRejectsReplicaOnDifferentPrimary(): void
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $method = $reflection->getMethod('resolveReplicaTarget');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage(<<<'MESSAGE'
+Replica 7004 belongs to primary 7001, not primary 7000.
+Valid replicas by primary:
+  7000: 7002 (fail), 7003 (online)
+MESSAGE);
+
+        $method->invoke($manager, $this->clusterShardsFixture(), 7004, false, 7000);
+    }
+
     public function testResolveReplicaTargetRejectsPrimaryWithTopologyMessage(): void
     {
         $manager = $this->newClusterManagerWithoutConstructor();

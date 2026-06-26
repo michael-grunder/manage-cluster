@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `--replica PORT` to `kill` and `restart-replica` for noninteractive
   targeting of a specific existing replica, with topology-aware validation
   messages that list valid replicas grouped by primary.
+- Added `--primary PORT` to `kill --replica` and `restart-replica --replica`
+  to reject a replica unless it belongs to the expected primary.
 - Added `start --primaries N` to choose the primary count for new clusters, with single-port expansion now using `primaries * (replicas + 1)` and defaulting to 3 primaries.
 - Added concurrent Redis node launch and batch readiness waiting for `start`, reducing startup time for larger local clusters.
 - Added `chaos`/`--chaos` action for serialized, stateful replica churn, with

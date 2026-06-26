@@ -327,7 +327,7 @@ final class ClusterManager
         $shards = $this->clusterShardsParser->parse($rawShards);
 
         if ($options->replicaPort !== null) {
-            $selectedNode = $this->resolveReplicaTarget($shards, $options->replicaPort, failedOnly: false);
+            $selectedNode = $this->resolveReplicaTarget($shards, $options->replicaPort, false, $options->primaryPort);
         } else {
             if (!$this->clusterTreeSelector->supportsInteractiveSelection()) {
                 throw new RuntimeException('kill needs an interactive TTY to choose a cluster node, or --replica PORT for noninteractive use.');
@@ -696,7 +696,7 @@ final class ClusterManager
         $shards = $this->clusterShardsParser->parse($rawShards);
 
         if ($options->replicaPort !== null) {
-            $selectedReplica = $this->resolveReplicaTarget($shards, $options->replicaPort, failedOnly: true);
+            $selectedReplica = $this->resolveReplicaTarget($shards, $options->replicaPort, true, $options->primaryPort);
         } else {
             if (!$this->clusterTreeSelector->supportsInteractiveSelection()) {
                 throw new RuntimeException('restart-replica needs an interactive TTY to choose a failed replica, or --replica PORT for noninteractive use.');
@@ -729,8 +729,18 @@ final class ClusterManager
     /**
      * @param list<ClusterShardStatus> $shards
      */
-    private function resolveReplicaTarget(array $shards, int $replicaPort, bool $failedOnly): ClusterNodeStatus
+    private function resolveReplicaTarget(array $shards, int $replicaPort, bool $failedOnly, ?int $primaryPort = null): ClusterNodeStatus
     {
+        $primaryShard = $primaryPort !== null ? $this->findShardByPrimaryPort($shards, $primaryPort) : null;
+        if ($primaryPort !== null && !$primaryShard instanceof ClusterShardStatus) {
+            throw new RuntimeException(sprintf(
+                "Port %d is not a primary in the cluster topology.%s%s",
+                $primaryPort,
+                PHP_EOL,
+                $this->formatReplicaTopology($shards, $failedOnly),
+            ));
+        }
+
         foreach ($shards as $shard) {
             if ($shard->master->port === $replicaPort) {
                 throw new RuntimeException(sprintf(
@@ -755,6 +765,17 @@ final class ClusterManager
                     ));
                 }
 
+                if ($primaryPort !== null && $shard->master->port !== $primaryPort) {
+                    throw new RuntimeException(sprintf(
+                        "Replica %d belongs to primary %d, not primary %d.%s%s",
+                        $replicaPort,
+                        $shard->master->port,
+                        $primaryPort,
+                        PHP_EOL,
+                        $this->formatReplicaTopology([$primaryShard], $failedOnly),
+                    ));
+                }
+
                 if ($failedOnly && $replica->health !== 'fail') {
                     throw new RuntimeException(sprintf(
                         "Replica %d belongs to primary %d but is not in fail state.%s%s",
@@ -773,8 +794,22 @@ final class ClusterManager
             "Port %d is not a replica in the cluster topology.%s%s",
             $replicaPort,
             PHP_EOL,
-            $this->formatReplicaTopology($shards, $failedOnly),
+            $this->formatReplicaTopology($primaryShard instanceof ClusterShardStatus ? [$primaryShard] : $shards, $failedOnly),
         ));
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function findShardByPrimaryPort(array $shards, int $primaryPort): ?ClusterShardStatus
+    {
+        foreach ($shards as $shard) {
+            if ($shard->master->port === $primaryPort) {
+                return $shard;
+            }
+        }
+
+        return null;
     }
 
     /**
