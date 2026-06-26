@@ -7,7 +7,7 @@ namespace Mgrunder\CreateCluster;
 final readonly class FillOptions
 {
     /**
-     * @param list<string> $types
+     * @param non-empty-list<string> $types
      */
     public function __construct(
         public int $sizeBytes,

@@ -85,6 +85,7 @@ final class ClusterStatusTuiRenderer
 
     /**
      * @param list<ClusterShardStatus> $shards
+     * @return int<7, max>
      */
     private function calculateViewportHeight(array $shards): int
     {

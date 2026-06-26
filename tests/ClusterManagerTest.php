@@ -16,6 +16,9 @@ use RuntimeException;
 
 final class ClusterManagerTest extends TestCase
 {
+    /**
+     * @param list<int> $ports
+     */
     #[DataProvider('compactPortListProvider')]
     public function testFormatCompactPortList(array $ports, string $expected): void
     {
@@ -75,33 +78,24 @@ final class ClusterManagerTest extends TestCase
     public function testResolveReplicaTargetReturnsMatchingReplica(): void
     {
         $manager = $this->newClusterManagerWithoutConstructor();
-        $reflection = new ReflectionClass($manager);
-        $method = $reflection->getMethod('resolveReplicaTarget');
 
-        $replica = $method->invoke($manager, $this->clusterShardsFixture(), 7002, false);
+        $replica = $this->invokeResolveReplicaTarget($manager, 7002, false);
 
-        self::assertInstanceOf(ClusterNodeStatus::class, $replica);
         self::assertSame(7002, $replica->port);
     }
 
     public function testResolveReplicaTargetReturnsReplicaWhenPrimaryMatches(): void
     {
         $manager = $this->newClusterManagerWithoutConstructor();
-        $reflection = new ReflectionClass($manager);
-        $method = $reflection->getMethod('resolveReplicaTarget');
 
-        $replica = $method->invoke($manager, $this->clusterShardsFixture(), 7002, false, 7000);
+        $replica = $this->invokeResolveReplicaTarget($manager, 7002, false, 7000);
 
-        self::assertInstanceOf(ClusterNodeStatus::class, $replica);
         self::assertSame(7002, $replica->port);
     }
 
     public function testResolveReplicaTargetRejectsReplicaOnDifferentPrimary(): void
     {
         $manager = $this->newClusterManagerWithoutConstructor();
-        $reflection = new ReflectionClass($manager);
-        $method = $reflection->getMethod('resolveReplicaTarget');
-
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage(<<<'MESSAGE'
 Replica 7004 belongs to primary 7001, not primary 7000.
@@ -109,15 +103,12 @@ Valid replicas by primary:
   7000: 7002 (fail), 7003 (online)
 MESSAGE);
 
-        $method->invoke($manager, $this->clusterShardsFixture(), 7004, false, 7000);
+        $this->invokeResolveReplicaTarget($manager, 7004, false, 7000);
     }
 
     public function testResolveReplicaTargetRejectsPrimaryWithTopologyMessage(): void
     {
         $manager = $this->newClusterManagerWithoutConstructor();
-        $reflection = new ReflectionClass($manager);
-        $method = $reflection->getMethod('resolveReplicaTarget');
-
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage(<<<'MESSAGE'
 Port 7000 is a primary, not a replica.
@@ -126,15 +117,12 @@ Valid replicas by primary:
   7001: 7004 (online)
 MESSAGE);
 
-        $method->invoke($manager, $this->clusterShardsFixture(), 7000, false);
+        $this->invokeResolveReplicaTarget($manager, 7000, false);
     }
 
     public function testResolveReplicaTargetRejectsHealthyReplicaForRestart(): void
     {
         $manager = $this->newClusterManagerWithoutConstructor();
-        $reflection = new ReflectionClass($manager);
-        $method = $reflection->getMethod('resolveReplicaTarget');
-
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage(<<<'MESSAGE'
 Replica 7003 belongs to primary 7000 but is not in fail state.
@@ -143,18 +131,14 @@ Restartable failed replicas by primary:
   7001: none
 MESSAGE);
 
-        $method->invoke($manager, $this->clusterShardsFixture(), 7003, true);
+        $this->invokeResolveReplicaTarget($manager, 7003, true);
     }
 
     public function testResolveReplicaTargetsReturnsAllReplicasGroupedByTopologyOrder(): void
     {
         $manager = $this->newClusterManagerWithoutConstructor();
-        $reflection = new ReflectionClass($manager);
-        $method = $reflection->getMethod('resolveReplicaTargets');
+        $targets = $this->invokeResolveReplicaTargets($manager, false, null);
 
-        $targets = $method->invoke($manager, $this->clusterShardsFixture(), false, null);
-
-        self::assertContainsOnlyInstancesOf(ReplicaTarget::class, $targets);
         self::assertSame([7002, 7003, 7004], array_map(
             static fn (ReplicaTarget $target): int => $target->replica->port,
             $targets,
@@ -168,10 +152,7 @@ MESSAGE);
     public function testResolveReplicaTargetsCanBeScopedToPrimary(): void
     {
         $manager = $this->newClusterManagerWithoutConstructor();
-        $reflection = new ReflectionClass($manager);
-        $method = $reflection->getMethod('resolveReplicaTargets');
-
-        $targets = $method->invoke($manager, $this->clusterShardsFixture(), false, 7000);
+        $targets = $this->invokeResolveReplicaTargets($manager, false, 7000);
 
         self::assertSame([7002, 7003], array_map(
             static fn (ReplicaTarget $target): int => $target->replica->port,
@@ -182,10 +163,7 @@ MESSAGE);
     public function testResolveReplicaTargetsCanSelectOnlyFailedReplicas(): void
     {
         $manager = $this->newClusterManagerWithoutConstructor();
-        $reflection = new ReflectionClass($manager);
-        $method = $reflection->getMethod('resolveReplicaTargets');
-
-        $targets = $method->invoke($manager, $this->clusterShardsFixture(), true, null);
+        $targets = $this->invokeResolveReplicaTargets($manager, true, null);
 
         self::assertSame([7002], array_map(
             static fn (ReplicaTarget $target): int => $target->replica->port,
@@ -267,6 +245,52 @@ MESSAGE);
         $manager = $reflection->newInstanceWithoutConstructor();
 
         return $manager;
+    }
+
+    private function invokeResolveReplicaTarget(
+        ClusterManager $manager,
+        int $replicaPort,
+        bool $failedOnly,
+        ?int $primaryPort = null,
+    ): ClusterNodeStatus {
+        $target = $this->invokeResolveReplicaTargetWithPrimary($manager, $replicaPort, $failedOnly, $primaryPort);
+
+        return $target->replica;
+    }
+
+    private function invokeResolveReplicaTargetWithPrimary(
+        ClusterManager $manager,
+        int $replicaPort,
+        bool $failedOnly,
+        ?int $primaryPort,
+    ): ReplicaTarget {
+        $reflection = new ReflectionClass($manager);
+        $method = $reflection->getMethod('resolveReplicaTargetWithPrimary');
+        $target = $method->invoke($manager, $this->clusterShardsFixture(), $replicaPort, $failedOnly, $primaryPort);
+
+        self::assertInstanceOf(ReplicaTarget::class, $target);
+
+        return $target;
+    }
+
+    /**
+     * @return list<ReplicaTarget>
+     */
+    private function invokeResolveReplicaTargets(ClusterManager $manager, bool $failedOnly, ?int $primaryPort): array
+    {
+        $reflection = new ReflectionClass($manager);
+        $method = $reflection->getMethod('resolveReplicaTargets');
+        $targets = $method->invoke($manager, $this->clusterShardsFixture(), $failedOnly, $primaryPort);
+
+        self::assertIsArray($targets);
+
+        $typedTargets = [];
+        foreach ($targets as $target) {
+            self::assertInstanceOf(ReplicaTarget::class, $target);
+            $typedTargets[] = $target;
+        }
+
+        return $typedTargets;
     }
 
     private function removeDirectory(string $dir): void

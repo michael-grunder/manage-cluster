@@ -122,9 +122,10 @@ final class AsyncNodeLatencyMonitor
 
         $this->stopped = true;
 
-        if (is_resource($this->controlStream)) {
+        $controlStream = $this->controlStream;
+        if (is_resource($controlStream)) {
             $this->sendMessage(['type' => 'stop']);
-            fclose($this->controlStream);
+            fclose($controlStream);
             $this->controlStream = null;
         }
 
@@ -195,12 +196,13 @@ final class AsyncNodeLatencyMonitor
 
     private function drainMessages(): void
     {
-        if (!is_resource($this->controlStream)) {
+        $controlStream = $this->controlStream;
+        if (!is_resource($controlStream)) {
             return;
         }
 
         while (true) {
-            $chunk = fread($this->controlStream, 8192);
+            $chunk = fread($controlStream, 8192);
             if ($chunk === false || $chunk === '') {
                 break;
             }
@@ -325,10 +327,28 @@ final class AsyncNodeLatencyMonitor
                     continue;
                 }
 
-                $trackedPorts = array_values(array_unique(array_map('intval', $message['ports'])));
+                $trackedPorts = $this->normalizePorts($message['ports']);
                 sort($trackedPorts, SORT_NUMERIC);
             }
         }
+    }
+
+    /**
+     * @param array<mixed> $ports
+     * @return list<int>
+     */
+    private function normalizePorts(array $ports): array
+    {
+        $normalized = [];
+        foreach ($ports as $port) {
+            if (!is_int($port) && !is_string($port)) {
+                continue;
+            }
+
+            $normalized[] = (int) $port;
+        }
+
+        return array_values(array_unique($normalized));
     }
 
     /**

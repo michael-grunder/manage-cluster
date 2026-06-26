@@ -104,6 +104,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed the redundant `Makefile`; PHAR builds now go through `composer build-phar`.
 
 ### Fixed
+- Fixed PHPStan max-level issues by validating decoded JSON/Redis data, narrowing
+  resource and reflection helper types, and declaring non-empty fill key types.
 - Fixed replica runtime config changes being lost across `kill` plus
   `restart-replica` by attempting `CONFIG REWRITE` before shutdown.
 - Fixed `bin/build-phar` so `composer build-phar` works after `composer install --no-dev` even when Composer omits optional metadata files such as `vendor/composer/autoload_files.php`.

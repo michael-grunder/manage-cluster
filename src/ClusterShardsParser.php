@@ -57,9 +57,15 @@ final class ClusterShardsParser
                 continue;
             }
 
+            $slotStart = $this->readInt($slotsData[0] ?? null);
+            $slotEnd = $this->readInt($slotsData[1] ?? null);
+            if ($slotStart === null || $slotEnd === null) {
+                continue;
+            }
+
             $shards[] = new ClusterShardStatus(
-                slotStart: (int) $slotsData[0],
-                slotEnd: (int) $slotsData[1],
+                slotStart: $slotStart,
+                slotEnd: $slotEnd,
                 master: $master,
                 replicas: $replicas,
             );
@@ -100,19 +106,45 @@ final class ClusterShardsParser
     {
         $nodeMap = $this->zipKeyValuePairs($nodeData);
 
-        $id = (string) ($nodeMap['id'] ?? '');
-        if ($id === '') {
+        $id = $this->readString($nodeMap['id'] ?? null);
+        if ($id === null || $id === '') {
             return null;
         }
 
         return new ClusterNodeStatus(
             id: $id,
-            ip: (string) ($nodeMap['ip'] ?? ''),
-            port: (int) ($nodeMap['port'] ?? 0),
-            endpoint: (string) ($nodeMap['endpoint'] ?? ''),
-            role: (string) ($nodeMap['role'] ?? ''),
-            replicationOffset: (int) ($nodeMap['replication-offset'] ?? 0),
-            health: (string) ($nodeMap['health'] ?? 'unknown'),
+            ip: $this->readString($nodeMap['ip'] ?? null) ?? '',
+            port: $this->readInt($nodeMap['port'] ?? null) ?? 0,
+            endpoint: $this->readString($nodeMap['endpoint'] ?? null) ?? '',
+            role: $this->readString($nodeMap['role'] ?? null) ?? '',
+            replicationOffset: $this->readInt($nodeMap['replication-offset'] ?? null) ?? 0,
+            health: $this->readString($nodeMap['health'] ?? null) ?? 'unknown',
         );
+    }
+
+    private function readInt(mixed $value): ?int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+
+        if (is_string($value) && preg_match('/^-?\d+$/', $value) === 1) {
+            return (int) $value;
+        }
+
+        return null;
+    }
+
+    private function readString(mixed $value): ?string
+    {
+        if (is_string($value)) {
+            return $value;
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+
+        return null;
     }
 }

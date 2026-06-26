@@ -94,7 +94,12 @@ final class RedisNodeClient
         }
 
         $ports = [];
-        foreach (preg_split('/\R/', trim($raw)) as $line) {
+        $lines = preg_split('/\R/', trim($raw));
+        if ($lines === false) {
+            return [$seedPort];
+        }
+
+        foreach ($lines as $line) {
             if (trim($line) === '') {
                 continue;
             }
@@ -357,7 +362,12 @@ final class RedisNodeClient
         }
 
         $info = [];
-        foreach (preg_split('/\R/', trim($raw)) as $line) {
+        $lines = preg_split('/\R/', trim($raw));
+        if ($lines === false) {
+            throw new RuntimeException(sprintf('CLUSTER INFO returned an unexpected response for port %d.', $port));
+        }
+
+        foreach ($lines as $line) {
             if ($line === '') {
                 continue;
             }

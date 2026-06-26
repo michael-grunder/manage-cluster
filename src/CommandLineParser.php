@@ -248,7 +248,7 @@ final class CommandLineParser
         $watch = false;
         $startServerArgs = [];
         $size = null;
-        $types = ['string', 'set', 'list', 'hash', 'zset'];
+        $types = self::defaultFillTypes();
         $members = self::DEFAULT_FILL_MEMBERS;
         $memberSize = self::DEFAULT_FILL_MEMBER_SIZE;
         $fillKeys = self::DEFAULT_FILL_TARGET_KEYS;
@@ -963,7 +963,15 @@ final class CommandLineParser
     }
 
     /**
-     * @return list<string>
+     * @return non-empty-list<string>
+     */
+    private static function defaultFillTypes(): array
+    {
+        return ['string', 'set', 'list', 'hash', 'zset'];
+    }
+
+    /**
+     * @return non-empty-list<string>
      */
     private function parseTypes(string $value): array
     {

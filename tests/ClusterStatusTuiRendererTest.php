@@ -9,6 +9,8 @@ use Mgrunder\CreateCluster\ClusterShardStatus;
 use Mgrunder\CreateCluster\ClusterStatusTuiRenderer;
 use Mgrunder\CreateCluster\NodeLatencySnapshot;
 use Mgrunder\CreateCluster\NodeLatencyState;
+use PhpTui\Tui\Extension\Core\Widget\BlockWidget;
+use PhpTui\Tui\Extension\Core\Widget\Table\TableRow;
 use PhpTui\Tui\Extension\Core\Widget\TableWidget;
 use PhpTui\Tui\Layout\Constraint\LengthConstraint;
 use PhpTui\Tui\Layout\Constraint\MinConstraint;
@@ -29,7 +31,7 @@ final class ClusterStatusTuiRendererTest extends TestCase
         self::assertSame(HorizontalAlignment::Left, $widget->titles[0]->horizontalAlignment);
         self::assertMatchesRegularExpression('/ \d{2}:\d{2}:\d{2} /', $widget->titles[1]->title->spans[0]->content);
         self::assertSame(HorizontalAlignment::Right, $widget->titles[1]->horizontalAlignment);
-        self::assertInstanceOf(TableWidget::class, $widget->widget);
+        $this->tableWidget($widget);
     }
 
     public function testCalculateViewportHeightDoesNotReserveMetadataRows(): void
@@ -47,9 +49,10 @@ final class ClusterStatusTuiRendererTest extends TestCase
 
         $widget = $this->invokeBuildRootWidget($renderer, $this->sampleShards(), false, []);
 
-        self::assertInstanceOf(TableWidget::class, $widget->widget);
-        self::assertSame('7000', $widget->widget->rows[0]->cells[0]->content->lines[0]->spans[0]->content);
-        self::assertSame('↳ 7005', $widget->widget->rows[1]->cells[0]->content->lines[0]->spans[0]->content);
+        $table = $this->tableWidget($widget);
+
+        self::assertSame('7000', $this->cellContent($this->tableRow($table, 0), 0));
+        self::assertSame('↳ 7005', $this->cellContent($this->tableRow($table, 1), 0));
     }
 
     public function testBuildRootWidgetUsesContentAwareColumnWidths(): void
@@ -58,27 +61,28 @@ final class ClusterStatusTuiRendererTest extends TestCase
 
         $widget = $this->invokeBuildRootWidget($renderer, $this->sampleShards(), true, $this->sampleLatencies());
 
-        self::assertInstanceOf(TableWidget::class, $widget->widget);
-        self::assertSame(1, $widget->widget->columnSpacing);
-        self::assertCount(7, $widget->widget->widths);
-        self::assertInstanceOf(LengthConstraint::class, $widget->widget->widths[0]);
-        self::assertSame(6, $widget->widget->widths[0]->length);
-        self::assertInstanceOf(LengthConstraint::class, $widget->widget->widths[1]);
-        self::assertSame(9, $widget->widget->widths[1]->length);
-        self::assertInstanceOf(LengthConstraint::class, $widget->widget->widths[2]);
-        self::assertSame(6, $widget->widget->widths[2]->length);
-        self::assertInstanceOf(LengthConstraint::class, $widget->widget->widths[3]);
-        self::assertSame(6, $widget->widget->widths[3]->length);
-        self::assertInstanceOf(LengthConstraint::class, $widget->widget->widths[4]);
-        self::assertSame(7, $widget->widget->widths[4]->length);
-        self::assertInstanceOf(LengthConstraint::class, $widget->widget->widths[5]);
-        self::assertSame(8, $widget->widget->widths[5]->length);
-        self::assertInstanceOf(MinConstraint::class, $widget->widget->widths[6]);
-        self::assertSame(8, $widget->widget->widths[6]->min);
-        self::assertSame('Latency', $widget->widget->header->cells[5]->content->lines[0]->spans[0]->content);
-        self::assertSame('1.23 ms', $widget->widget->rows[0]->cells[5]->content->lines[0]->spans[0]->content);
-        self::assertSame('timeout', $widget->widget->rows[1]->cells[5]->content->lines[0]->spans[0]->content);
-        self::assertSame('pending', $widget->widget->rows[2]->cells[5]->content->lines[0]->spans[0]->content);
+        $table = $this->tableWidget($widget);
+
+        self::assertSame(1, $table->columnSpacing);
+        self::assertCount(7, $table->widths);
+        self::assertInstanceOf(LengthConstraint::class, $table->widths[0]);
+        self::assertSame(6, $table->widths[0]->length);
+        self::assertInstanceOf(LengthConstraint::class, $table->widths[1]);
+        self::assertSame(9, $table->widths[1]->length);
+        self::assertInstanceOf(LengthConstraint::class, $table->widths[2]);
+        self::assertSame(6, $table->widths[2]->length);
+        self::assertInstanceOf(LengthConstraint::class, $table->widths[3]);
+        self::assertSame(6, $table->widths[3]->length);
+        self::assertInstanceOf(LengthConstraint::class, $table->widths[4]);
+        self::assertSame(7, $table->widths[4]->length);
+        self::assertInstanceOf(LengthConstraint::class, $table->widths[5]);
+        self::assertSame(8, $table->widths[5]->length);
+        self::assertInstanceOf(MinConstraint::class, $table->widths[6]);
+        self::assertSame(8, $table->widths[6]->min);
+        self::assertSame('Latency', $this->cellContent($this->tableHeader($table), 5));
+        self::assertSame('1.23 ms', $this->cellContent($this->tableRow($table, 0), 5));
+        self::assertSame('timeout', $this->cellContent($this->tableRow($table, 1), 5));
+        self::assertSame('pending', $this->cellContent($this->tableRow($table, 2), 5));
     }
 
     public function testBuildRootWidgetOmitsLatencyColumnOutsideWatchMode(): void
@@ -87,9 +91,10 @@ final class ClusterStatusTuiRendererTest extends TestCase
 
         $widget = $this->invokeBuildRootWidget($renderer, $this->sampleShards(), false, $this->sampleLatencies());
 
-        self::assertInstanceOf(TableWidget::class, $widget->widget);
-        self::assertCount(6, $widget->widget->widths);
-        self::assertSame('Health', $widget->widget->header->cells[5]->content->lines[0]->spans[0]->content);
+        $table = $this->tableWidget($widget);
+
+        self::assertCount(6, $table->widths);
+        self::assertSame('Health', $this->cellContent($this->tableHeader($table), 5));
     }
 
     /**
@@ -101,11 +106,14 @@ final class ClusterStatusTuiRendererTest extends TestCase
         array $shards,
         bool $watchMode,
         array $latenciesByPort,
-    ): object
+    ): BlockWidget
     {
         $method = new ReflectionMethod($renderer, 'buildRootWidget');
 
-        return $method->invoke($renderer, $shards, $watchMode, $latenciesByPort);
+        $widget = $method->invoke($renderer, $shards, $watchMode, $latenciesByPort);
+        self::assertInstanceOf(BlockWidget::class, $widget);
+
+        return $widget;
     }
 
     /**
@@ -115,7 +123,44 @@ final class ClusterStatusTuiRendererTest extends TestCase
     {
         $method = new ReflectionMethod($renderer, 'calculateViewportHeight');
 
-        return $method->invoke($renderer, $shards);
+        $height = $method->invoke($renderer, $shards);
+        self::assertIsInt($height);
+
+        return $height;
+    }
+
+    private function tableWidget(BlockWidget $widget): TableWidget
+    {
+        self::assertInstanceOf(TableWidget::class, $widget->widget);
+
+        return $widget->widget;
+    }
+
+    private function tableHeader(TableWidget $table): TableRow
+    {
+        self::assertInstanceOf(TableRow::class, $table->header);
+
+        return $table->header;
+    }
+
+    private function tableRow(TableWidget $table, int $index): TableRow
+    {
+        $row = $table->rows[$index] ?? null;
+        self::assertInstanceOf(TableRow::class, $row);
+
+        return $row;
+    }
+
+    private function cellContent(TableRow $row, int $index): string
+    {
+        $cell = $row->cells[$index] ?? null;
+        self::assertNotNull($cell);
+        $line = $cell->content->lines[0] ?? null;
+        self::assertNotNull($line);
+        $span = $line->spans[0] ?? null;
+        self::assertNotNull($span);
+
+        return $span->content;
     }
 
     /**

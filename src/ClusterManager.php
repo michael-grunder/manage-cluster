@@ -808,14 +808,6 @@ final class ClusterManager
     /**
      * @param list<ClusterShardStatus> $shards
      */
-    private function resolveReplicaTarget(array $shards, int $replicaPort, bool $failedOnly, ?int $primaryPort = null): ClusterNodeStatus
-    {
-        return $this->resolveReplicaTargetWithPrimary($shards, $replicaPort, $failedOnly, $primaryPort)->replica;
-    }
-
-    /**
-     * @param list<ClusterShardStatus> $shards
-     */
     private function resolveReplicaTargetWithPrimary(array $shards, int $replicaPort, bool $failedOnly, ?int $primaryPort = null): ReplicaTarget
     {
         $primaryShard = $primaryPort !== null ? $this->findShardByPrimaryPort($shards, $primaryPort) : null;
@@ -2689,7 +2681,7 @@ final class ClusterManager
             return '';
         }
 
-        return substr(bin2hex(random_bytes((int) ceil($length / 2))), 0, $length);
+        return substr(bin2hex(random_bytes($length)), 0, $length);
     }
 
     /**
@@ -3210,7 +3202,7 @@ final class ClusterManager
                 'port_range' => $this->formatPortRange($ports),
                 'total_nodes' => count($ports),
                 'listening_nodes' => $listeningNodes,
-                'replicas' => is_int($metadata['replicas'] ?? null) ? $metadata['replicas'] : (int) ($metadata['replicas'] ?? 0),
+                'replicas' => $this->readOptionalMetadataInt($metadata, 'replicas') ?? 0,
                 'tls' => (bool) ($metadata['tls'] ?? false),
             ];
         }
@@ -3221,6 +3213,23 @@ final class ClusterManager
         );
 
         return $summaries;
+    }
+
+    /**
+     * @param array<string, mixed> $metadata
+     */
+    private function readOptionalMetadataInt(array $metadata, string $key): ?int
+    {
+        $value = $metadata[$key] ?? null;
+        if (is_int($value)) {
+            return $value;
+        }
+
+        if (is_string($value) && preg_match('/^-?\d+$/', $value) === 1) {
+            return (int) $value;
+        }
+
+        return null;
     }
 
     /**

@@ -21,7 +21,7 @@ final class SystemInspectorTest extends TestCase
 
         try {
             $inspector->ensureExecutableExists($path, 'redis-server');
-            self::assertTrue(true);
+            self::assertTrue(is_executable($path));
         } finally {
             @unlink($path);
         }

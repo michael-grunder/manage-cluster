@@ -131,7 +131,7 @@ final class ClusterStateStore
     }
 
     /**
-     * @return array{clusters: array<string, string>, ports: array<string, string>}
+     * @return array{clusters: array<string, string>, ports: array<int|string, string>}
      */
     private function loadIndex(): array
     {
@@ -160,13 +160,13 @@ final class ClusterStateStore
         }
 
         return [
-            'clusters' => is_array($decoded['clusters'] ?? null) ? $decoded['clusters'] : [],
-            'ports' => is_array($decoded['ports'] ?? null) ? $decoded['ports'] : [],
+            'clusters' => $this->normalizeClusterMap($decoded['clusters'] ?? null),
+            'ports' => $this->normalizeStringMap($decoded['ports'] ?? null),
         ];
     }
 
     /**
-     * @param callable(array{clusters: array<string, string>, ports: array<string, string>}): array{clusters: array<string, string>, ports: array<string, string>} $mutator
+     * @param callable(array{clusters: array<string, string>, ports: array<int|string, string>}): array{clusters: array<string, string>, ports: array<int|string, string>} $mutator
      */
     private function mutateIndex(callable $mutator): void
     {
@@ -194,8 +194,8 @@ final class ClusterStateStore
                 $decoded = json_decode($content, true);
                 if (is_array($decoded)) {
                     $index = [
-                        'clusters' => is_array($decoded['clusters'] ?? null) ? $decoded['clusters'] : [],
-                        'ports' => is_array($decoded['ports'] ?? null) ? $decoded['ports'] : [],
+                        'clusters' => $this->normalizeClusterMap($decoded['clusters'] ?? null),
+                        'ports' => $this->normalizeStringMap($decoded['ports'] ?? null),
                     ];
                 }
             }
@@ -240,7 +240,67 @@ final class ClusterStateStore
             return null;
         }
 
-        return $decoded;
+        return $this->normalizeMetadata($decoded);
+    }
+
+    /**
+     * @return array<int|string, string>
+     */
+    private function normalizeStringMap(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($value as $key => $item) {
+            if (!is_string($item)) {
+                continue;
+            }
+
+            $normalized[$key] = $item;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function normalizeClusterMap(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($value as $key => $item) {
+            if (!is_string($key) || !is_string($item)) {
+                continue;
+            }
+
+            $normalized[$key] = $item;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @param array<mixed, mixed> $metadata
+     * @return array<string, mixed>
+     */
+    private function normalizeMetadata(array $metadata): array
+    {
+        $normalized = [];
+        foreach ($metadata as $key => $value) {
+            if (!is_string($key)) {
+                continue;
+            }
+
+            $normalized[$key] = $value;
+        }
+
+        return $normalized;
     }
 
     /**
