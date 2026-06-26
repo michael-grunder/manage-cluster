@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   messages that list valid replicas grouped by primary.
 - Added `--primary PORT` to `kill --replica` and `restart-replica --replica`
   to reject a replica unless it belongs to the expected primary.
+- Added `--all` to `kill` and `restart-replica` so all replicas, or all
+  replicas under `--primary PORT`, can be stopped or restarted in one command.
+- Added `--wait` to `kill` and `restart-replica` so replica operations can block
+  until Redis cluster state reports each target as down or healthy.
 - Added `start --primaries N` to choose the primary count for new clusters, with single-port expansion now using `primaries * (replicas + 1)` and defaulting to 3 primaries.
 - Added concurrent Redis node launch and batch readiness waiting for `start`, reducing startup time for larger local clusters.
 - Added `chaos`/`--chaos` action for serialized, stateful replica churn, with

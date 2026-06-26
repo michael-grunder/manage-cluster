@@ -247,6 +247,8 @@ provided.
 bin/manage-cluster kill 7000
 bin/manage-cluster kill 7000 --replica 7002
 bin/manage-cluster kill 7000 --primary 7000 --replica 7002
+bin/manage-cluster kill 7000 --all --wait
+bin/manage-cluster kill 7000 --primary 7000 --all --wait
 ```
 
 The picker shows primaries followed by their replicas. Navigation supports
@@ -254,6 +256,10 @@ The picker shows primaries followed by their replicas. Navigation supports
 When `--replica` is used, the port must be a replica in the discovered topology.
 Add `--primary PORT` to ensure that replica belongs to the expected primary;
 invalid targets print the valid replicas grouped by primary.
+Use `--all` to shut down every replica in the cluster, or combine it with
+`--primary PORT` to shut down every replica attached to that primary. Add
+`--wait` when targeting replicas to keep the command running until Redis cluster
+state reports each stopped replica as down.
 
 ### `add-replica`
 
@@ -282,6 +288,8 @@ Restarts a failed replica using its existing managed node config.
 bin/manage-cluster restart-replica 7000
 bin/manage-cluster restart-replica 7000 --replica 7002
 bin/manage-cluster restart-replica 7000 --primary 7000 --replica 7002
+bin/manage-cluster restart-replica 7000 --all --wait
+bin/manage-cluster restart-replica 7000 --primary 7000 --all --wait
 bin/manage-cluster restart-replica 7000 --replica 7002 --config replica-serve-stale-data=no
 ```
 
@@ -291,6 +299,10 @@ Behavior notes:
 - Only failed replicas can be restarted
 - Add `--primary PORT` to ensure the failed replica belongs to the expected
   primary before restarting it
+- Use `--all` to restart every failed replica in the cluster, or combine it with
+  `--primary PORT` to restart every failed replica attached to that primary
+- Add `--wait` to keep the command running until Redis cluster state reports
+  each restarted replica as healthy
 - Repeated `--config NAME=VALUE` options run `CONFIG SET` after the replica is
   ready and then `CONFIG REWRITE` so the override is persisted in `redis.conf`
 - Invalid `--replica` targets print the restartable failed replicas grouped by

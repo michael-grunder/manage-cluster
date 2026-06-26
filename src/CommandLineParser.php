@@ -19,14 +19,14 @@ final class CommandLineParser
     private const array ACTION_SUMMARIES = [
         'start' => 'Start one local Redis Cluster from the given ports',
         'stop' => 'Stop every managed node in the cluster(s)',
-        'kill' => 'Stop one primary or replica from a seed node',
+        'kill' => 'Stop one primary, one replica, or selected replica groups from a seed node',
         'rebalance' => 'Rebalance slots across the selected cluster nodes',
         'status' => 'Show shard and node status for one cluster, or summarize all managed clusters',
         'list' => 'List managed clusters that appear to still be running',
         'flush' => 'Flush every primary in the selected cluster(s)',
         'fill' => 'Fill a cluster until its primaries reach a target size',
         'add-replica' => 'Add a new replica to a selected primary',
-        'restart-replica' => 'Restart one failed replica from cluster metadata',
+        'restart-replica' => 'Restart one or more failed replicas from cluster metadata',
         'chaos' => 'Run serialized replica-focused cluster churn for client testing',
     ];
 
@@ -51,7 +51,9 @@ final class CommandLineParser
         ],
         'kill' => [
             ['--replica PORT', 'Replica port to stop without opening the picker'],
-            ['--primary PORT', 'Require --replica to belong to this primary'],
+            ['--primary PORT', 'Require --replica or --all targets to belong to this primary'],
+            ['--all', 'Stop every replica, or every replica under --primary PORT'],
+            ['--wait', 'Wait until Redis cluster state reports stopped replica targets as down'],
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'rebalance' => [
@@ -92,7 +94,9 @@ final class CommandLineParser
         ],
         'restart-replica' => [
             ['--replica PORT', 'Failed replica port to restart without opening the picker'],
-            ['--primary PORT', 'Require --replica to belong to this primary'],
+            ['--primary PORT', 'Require --replica or --all targets to belong to this primary'],
+            ['--all', 'Restart every failed replica, or every failed replica under --primary PORT'],
+            ['--wait', 'Wait until Redis cluster state reports restarted replica targets as healthy'],
             ['--config NAME=VALUE', 'Apply and persist a Redis CONFIG SET override after restart; repeatable'],
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
@@ -133,6 +137,8 @@ final class CommandLineParser
             'bin/manage-cluster kill 7000',
             'bin/manage-cluster kill 7000 --replica 7002',
             'bin/manage-cluster kill 7000 --primary 7000 --replica 7002',
+            'bin/manage-cluster kill 7000 --all --wait',
+            'bin/manage-cluster kill 7000 --primary 7000 --all --wait',
         ],
         'rebalance' => [
             'bin/manage-cluster rebalance 7000',
@@ -164,6 +170,8 @@ final class CommandLineParser
             'bin/manage-cluster restart-replica 7000',
             'bin/manage-cluster restart-replica 7000 --replica 7002',
             'bin/manage-cluster restart-replica 7000 --primary 7000 --replica 7002',
+            'bin/manage-cluster restart-replica 7000 --all --wait',
+            'bin/manage-cluster restart-replica 7000 --primary 7000 --all --wait',
             'bin/manage-cluster restart-replica 7000 --replica 7002 --config replica-serve-stale-data=no',
         ],
         'chaos' => [
@@ -196,6 +204,7 @@ final class CommandLineParser
         ],
         'restart-replica' => [
             'The CLI only restarts failed replicas that can be recovered from saved metadata.',
+            '--all is scoped to failed replicas only; healthy replicas are left running.',
         ],
         'chaos' => [
             'v1 focuses on serialized replica churn: kill, restart, and add.',
@@ -223,6 +232,8 @@ final class CommandLineParser
         $generatedScriptPath = null;
         $restartConfigOverrides = [];
         $restartConfigOverrideProvided = false;
+        $all = false;
+        $wait = false;
 
         $primaries = 3;
         $primariesProvided = false;
@@ -332,6 +343,14 @@ final class CommandLineParser
 
                 case '--watch':
                     $watch = true;
+                    break;
+
+                case '--all':
+                    $all = true;
+                    break;
+
+                case '--wait':
+                    $wait = true;
                     break;
 
                 case '--categories':
@@ -472,6 +491,14 @@ final class CommandLineParser
             throw new InvalidArgumentException('--watch can only be used with status or chaos.');
         }
 
+        if ($all && !in_array($action, ['kill', 'restart-replica'], true)) {
+            throw new InvalidArgumentException('--all can only be used with kill or restart-replica.');
+        }
+
+        if ($wait && !in_array($action, ['kill', 'restart-replica'], true)) {
+            throw new InvalidArgumentException('--wait can only be used with kill or restart-replica.');
+        }
+
         if ($startServerArgs !== [] && $action !== 'start') {
             throw new InvalidArgumentException('Arguments after -- can only be used with start.');
         }
@@ -580,8 +607,12 @@ final class CommandLineParser
             throw new InvalidArgumentException('--primary can only be used with kill or restart-replica.');
         }
 
-        if ($primaryPort !== null && $replicaPortOption !== '--replica') {
-            throw new InvalidArgumentException('--primary requires --replica.');
+        if ($all && $replicaPortOption === '--replica') {
+            throw new InvalidArgumentException('--all and --replica cannot be used together.');
+        }
+
+        if ($primaryPort !== null && $replicaPortOption !== '--replica' && !$all) {
+            throw new InvalidArgumentException('--primary requires --replica or --all.');
         }
 
         if ($action !== 'restart-replica' && $restartConfigOverrideProvided) {
@@ -719,6 +750,8 @@ final class CommandLineParser
             chaos: $chaosOptions,
             startConfigDirectives: $startConfigDirectives,
             startServerArgs: $startServerArgs,
+            all: $all,
+            wait: $wait,
         );
     }
 
@@ -1076,14 +1109,14 @@ final class CommandLineParser
         return match ($action) {
             'start' => 'bin/manage-cluster start PORT [PORT ...] [--primaries N] [--replicas N] [--tls] [--gen-script PATH] [-- NAME VALUE ...]',
             'stop' => 'bin/manage-cluster stop PORT [PORT ...]',
-            'kill' => 'bin/manage-cluster kill SEED_PORT [--replica PORT] [--primary PORT]',
+            'kill' => 'bin/manage-cluster kill SEED_PORT [--replica PORT] [--primary PORT] [--all] [--wait]',
             'rebalance' => 'bin/manage-cluster rebalance PORT [PORT ...]',
             'status' => 'bin/manage-cluster status [PORT] [--watch]',
             'list' => 'bin/manage-cluster list',
             'flush' => 'bin/manage-cluster flush PORT [PORT ...]',
             'fill' => 'bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]',
             'add-replica' => 'bin/manage-cluster add-replica SEED_PORT [--port PORT]',
-            'restart-replica' => 'bin/manage-cluster restart-replica SEED_PORT [--replica PORT] [--primary PORT] [--config NAME=VALUE]',
+            'restart-replica' => 'bin/manage-cluster restart-replica SEED_PORT [--replica PORT] [--primary PORT] [--all] [--wait] [--config NAME=VALUE]',
             'chaos' => 'bin/manage-cluster chaos SEED_PORT [--categories LIST] [--interval SECONDS] [--max-events N] [--dry-run] [--watch]',
             default => 'bin/manage-cluster [OPTIONS] <COMMAND> [ARGS]',
         };

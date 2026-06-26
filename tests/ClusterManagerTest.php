@@ -8,6 +8,7 @@ use Mgrunder\CreateCluster\ClusterManager;
 use Mgrunder\CreateCluster\ClusterNodeStatus;
 use Mgrunder\CreateCluster\ClusterShardStatus;
 use Mgrunder\CreateCluster\PortRangeFormatter;
+use Mgrunder\CreateCluster\ReplicaTarget;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
@@ -143,6 +144,86 @@ Restartable failed replicas by primary:
 MESSAGE);
 
         $method->invoke($manager, $this->clusterShardsFixture(), 7003, true);
+    }
+
+    public function testResolveReplicaTargetsReturnsAllReplicasGroupedByTopologyOrder(): void
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $method = $reflection->getMethod('resolveReplicaTargets');
+
+        $targets = $method->invoke($manager, $this->clusterShardsFixture(), false, null);
+
+        self::assertContainsOnlyInstancesOf(ReplicaTarget::class, $targets);
+        self::assertSame([7002, 7003, 7004], array_map(
+            static fn (ReplicaTarget $target): int => $target->replica->port,
+            $targets,
+        ));
+        self::assertSame([7000, 7000, 7001], array_map(
+            static fn (ReplicaTarget $target): int => $target->primaryPort,
+            $targets,
+        ));
+    }
+
+    public function testResolveReplicaTargetsCanBeScopedToPrimary(): void
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $method = $reflection->getMethod('resolveReplicaTargets');
+
+        $targets = $method->invoke($manager, $this->clusterShardsFixture(), false, 7000);
+
+        self::assertSame([7002, 7003], array_map(
+            static fn (ReplicaTarget $target): int => $target->replica->port,
+            $targets,
+        ));
+    }
+
+    public function testResolveReplicaTargetsCanSelectOnlyFailedReplicas(): void
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $method = $reflection->getMethod('resolveReplicaTargets');
+
+        $targets = $method->invoke($manager, $this->clusterShardsFixture(), true, null);
+
+        self::assertSame([7002], array_map(
+            static fn (ReplicaTarget $target): int => $target->replica->port,
+            $targets,
+        ));
+    }
+
+    public function testResolveReplicaTargetsRejectsPrimaryWithoutMatchingFailedReplicas(): void
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $method = $reflection->getMethod('resolveReplicaTargets');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage(<<<'MESSAGE'
+No failed replicas found for primary 7001.
+Restartable failed replicas by primary:
+  7001: none
+MESSAGE);
+
+        $method->invoke($manager, $this->clusterShardsFixture(), true, 7001);
+    }
+
+    public function testReplicaTargetStateMatchesDownAndUpClusterState(): void
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $method = $reflection->getMethod('replicaTargetMatchesDesiredClusterState');
+
+        $target = new ReplicaTarget($this->node(7002, 'replica', 'fail'), 7000);
+
+        self::assertTrue($method->invoke($manager, $this->clusterShardsFixture(), $target, 'down'));
+        self::assertFalse($method->invoke($manager, $this->clusterShardsFixture(), $target, 'up'));
+
+        $healthyTarget = new ReplicaTarget($this->node(7003, 'replica', 'online'), 7000);
+
+        self::assertTrue($method->invoke($manager, $this->clusterShardsFixture(), $healthyTarget, 'up'));
+        self::assertFalse($method->invoke($manager, $this->clusterShardsFixture(), $healthyTarget, 'down'));
     }
 
     public function testWriteNodeConfigurationPersistsStartConfigDirectives(): void

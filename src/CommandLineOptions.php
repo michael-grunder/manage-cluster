@@ -33,6 +33,8 @@ final readonly class CommandLineOptions
         public ?ChaosOptions $chaos,
         public array $startConfigDirectives,
         public array $startServerArgs,
+        public bool $all = false,
+        public bool $wait = false,
     ) {
     }
 }

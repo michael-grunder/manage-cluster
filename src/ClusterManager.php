@@ -14,6 +14,7 @@ final class ClusterManager
     private const int CHAOS_PRIMARY_REPLICA_CAP = 2;
     private const float STOP_SHUTDOWN_GRACE_SECONDS = 2.0;
     private const float STOP_SIGNAL_WAIT_SECONDS = 1.0;
+    private const int REPLICA_STATE_WAIT_POLL_MICROSECONDS = 250_000;
 
     public function __construct(
         private readonly SystemInspector $systemInspector,
@@ -326,8 +327,33 @@ final class ClusterManager
         [$tls, $caCert, , $rawShards] = $this->resolveSeedConnectionContext($seedPort, $metadata);
         $shards = $this->clusterShardsParser->parse($rawShards);
 
+        if ($options->all) {
+            $targets = $this->resolveReplicaTargets($shards, failedOnly: false, primaryPort: $options->primaryPort);
+            $this->shutdownReplicaTargets($targets, $tls, $caCert);
+            if ($options->wait) {
+                $this->waitForReplicaTargetsClusterState(
+                    seedPort: $this->selectReplicaStateWaitSeedPort($seedPort, $shards, $targets),
+                    targets: $targets,
+                    tls: $tls,
+                    caCert: $caCert,
+                    desiredState: 'down',
+                );
+            }
+
+            $this->persistClusterMetadataPortRemovals($metadata, $this->replicaTargetPorts($targets));
+
+            $this->output->success(sprintf(
+                'Stopped replica%s %s',
+                count($targets) === 1 ? '' : 's',
+                $this->formatReplicaTargetList($targets),
+            ));
+
+            return;
+        }
+
         if ($options->replicaPort !== null) {
-            $selectedNode = $this->resolveReplicaTarget($shards, $options->replicaPort, false, $options->primaryPort);
+            $target = $this->resolveReplicaTargetWithPrimary($shards, $options->replicaPort, false, $options->primaryPort);
+            $selectedNode = $target->replica;
         } else {
             if (!$this->clusterTreeSelector->supportsInteractiveSelection()) {
                 throw new RuntimeException('kill needs an interactive TTY to choose a cluster node, or --replica PORT for noninteractive use.');
@@ -345,10 +371,26 @@ final class ClusterManager
             throw new RuntimeException('Kill cancelled.');
         }
 
+        if ($options->wait && $selectedNode->role !== 'replica') {
+            throw new RuntimeException('--wait can only be used when kill targets replicas.');
+        }
+
         $this->output->step(sprintf('Sending SHUTDOWN to %s', $selectedNode->address()));
         $this->persistRuntimeConfigBeforeShutdown($selectedNode->port, $tls, $caCert);
         $this->redisNodeClient->shutdown($selectedNode->port, $tls, $caCert);
         $this->systemInspector->waitForPortsToClose([$selectedNode->port]);
+
+        if ($options->wait) {
+            $target ??= new ReplicaTarget($selectedNode, $this->findPrimaryPortForReplica($shards, $selectedNode->port));
+            $this->waitForReplicaTargetsClusterState(
+                seedPort: $this->selectReplicaStateWaitSeedPort($seedPort, $shards, [$target]),
+                targets: [$target],
+                tls: $tls,
+                caCert: $caCert,
+                desiredState: 'down',
+            );
+        }
+
         $this->persistClusterMetadataPortRemoval($metadata, $selectedNode->port);
         $this->output->success(sprintf('Stopped cluster node %s', $selectedNode->address()));
     }
@@ -695,8 +737,34 @@ final class ClusterManager
         [$tls, $caCert, , $rawShards] = $this->resolveSeedConnectionContext($seedPort, $metadata);
         $shards = $this->clusterShardsParser->parse($rawShards);
 
+        if ($options->all) {
+            $targets = $this->resolveReplicaTargets($shards, failedOnly: true, primaryPort: $options->primaryPort);
+            foreach ($targets as $target) {
+                $this->restartReplicaPort($target->replica->port, $metadata, $options, $tls, $caCert);
+            }
+
+            if ($options->wait) {
+                $this->waitForReplicaTargetsClusterState(
+                    seedPort: $this->selectReplicaStateWaitSeedPort($seedPort, $shards, $targets),
+                    targets: $targets,
+                    tls: $tls,
+                    caCert: $caCert,
+                    desiredState: 'up',
+                );
+            }
+
+            $this->output->success(sprintf(
+                'Restarted replica%s %s',
+                count($targets) === 1 ? '' : 's',
+                $this->formatReplicaTargetList($targets),
+            ));
+
+            return;
+        }
+
         if ($options->replicaPort !== null) {
-            $selectedReplica = $this->resolveReplicaTarget($shards, $options->replicaPort, true, $options->primaryPort);
+            $target = $this->resolveReplicaTargetWithPrimary($shards, $options->replicaPort, true, $options->primaryPort);
+            $selectedReplica = $target->replica;
         } else {
             if (!$this->clusterTreeSelector->supportsInteractiveSelection()) {
                 throw new RuntimeException('restart-replica needs an interactive TTY to choose a failed replica, or --replica PORT for noninteractive use.');
@@ -723,6 +791,17 @@ final class ClusterManager
         }
 
         $this->restartReplicaPort($selectedReplica->port, $metadata, $options, $tls, $caCert);
+        if ($options->wait) {
+            $target ??= new ReplicaTarget($selectedReplica, $this->findPrimaryPortForReplica($shards, $selectedReplica->port));
+            $this->waitForReplicaTargetsClusterState(
+                seedPort: $this->selectReplicaStateWaitSeedPort($seedPort, $shards, [$target]),
+                targets: [$target],
+                tls: $tls,
+                caCert: $caCert,
+                desiredState: 'up',
+            );
+        }
+
         $this->output->success(sprintf('Replica %s restarted', $selectedReplica->address()));
     }
 
@@ -730,6 +809,14 @@ final class ClusterManager
      * @param list<ClusterShardStatus> $shards
      */
     private function resolveReplicaTarget(array $shards, int $replicaPort, bool $failedOnly, ?int $primaryPort = null): ClusterNodeStatus
+    {
+        return $this->resolveReplicaTargetWithPrimary($shards, $replicaPort, $failedOnly, $primaryPort)->replica;
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function resolveReplicaTargetWithPrimary(array $shards, int $replicaPort, bool $failedOnly, ?int $primaryPort = null): ReplicaTarget
     {
         $primaryShard = $primaryPort !== null ? $this->findShardByPrimaryPort($shards, $primaryPort) : null;
         if ($primaryPort !== null && !$primaryShard instanceof ClusterShardStatus) {
@@ -786,7 +873,7 @@ final class ClusterManager
                     ));
                 }
 
-                return $replica;
+                return new ReplicaTarget($replica, $shard->master->port);
             }
         }
 
@@ -796,6 +883,253 @@ final class ClusterManager
             PHP_EOL,
             $this->formatReplicaTopology($primaryShard instanceof ClusterShardStatus ? [$primaryShard] : $shards, $failedOnly),
         ));
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     * @return list<ReplicaTarget>
+     */
+    private function resolveReplicaTargets(array $shards, bool $failedOnly, ?int $primaryPort = null): array
+    {
+        $primaryShard = $primaryPort !== null ? $this->findShardByPrimaryPort($shards, $primaryPort) : null;
+        if ($primaryPort !== null && !$primaryShard instanceof ClusterShardStatus) {
+            throw new RuntimeException(sprintf(
+                "Port %d is not a primary in the cluster topology.%s%s",
+                $primaryPort,
+                PHP_EOL,
+                $this->formatReplicaTopology($shards, $failedOnly),
+            ));
+        }
+
+        $targetShards = $primaryShard instanceof ClusterShardStatus ? [$primaryShard] : $shards;
+        $targets = [];
+        foreach ($targetShards as $shard) {
+            foreach ($shard->replicas as $replica) {
+                if ($replica->role !== 'replica') {
+                    continue;
+                }
+
+                if ($failedOnly && $replica->health !== 'fail') {
+                    continue;
+                }
+
+                $targets[] = new ReplicaTarget($replica, $shard->master->port);
+            }
+        }
+
+        if ($targets === []) {
+            $scope = $primaryPort !== null ? sprintf(' for primary %d', $primaryPort) : '';
+            throw new RuntimeException(sprintf(
+                "No %sreplicas found%s.%s%s",
+                $failedOnly ? 'failed ' : '',
+                $scope,
+                PHP_EOL,
+                $this->formatReplicaTopology($targetShards, $failedOnly),
+            ));
+        }
+
+        return $targets;
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function findPrimaryPortForReplica(array $shards, int $replicaPort): int
+    {
+        foreach ($shards as $shard) {
+            foreach ($shard->replicas as $replica) {
+                if ($replica->port === $replicaPort) {
+                    return $shard->master->port;
+                }
+            }
+        }
+
+        throw new RuntimeException(sprintf('Unable to resolve primary for replica %d.', $replicaPort));
+    }
+
+    /**
+     * @param list<ReplicaTarget> $targets
+     */
+    private function shutdownReplicaTargets(array $targets, bool $tls, ?string $caCert): void
+    {
+        $ports = $this->replicaTargetPorts($targets);
+        $this->output->step(sprintf(
+            'Sending SHUTDOWN to replica%s %s',
+            count($ports) === 1 ? '' : 's',
+            $this->formatCompactPortList($ports),
+        ));
+
+        foreach ($targets as $target) {
+            $this->persistRuntimeConfigBeforeShutdown($target->replica->port, $tls, $caCert);
+        }
+
+        foreach ($targets as $target) {
+            $this->redisNodeClient->shutdown($target->replica->port, $tls, $caCert);
+        }
+
+        $this->systemInspector->waitForPortsToClose($ports);
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     * @param list<ReplicaTarget> $targets
+     */
+    private function selectReplicaStateWaitSeedPort(int $seedPort, array $shards, array $targets): int
+    {
+        $targetPorts = array_fill_keys($this->replicaTargetPorts($targets), true);
+        if (!isset($targetPorts[$seedPort])) {
+            return $seedPort;
+        }
+
+        foreach ($shards as $shard) {
+            if (!isset($targetPorts[$shard->master->port])) {
+                return $shard->master->port;
+            }
+        }
+
+        foreach ($shards as $shard) {
+            foreach ($shard->replicas as $replica) {
+                if (!isset($targetPorts[$replica->port])) {
+                    return $replica->port;
+                }
+            }
+        }
+
+        return $seedPort;
+    }
+
+    /**
+     * @param list<ReplicaTarget> $targets
+     */
+    private function waitForReplicaTargetsClusterState(
+        int $seedPort,
+        array $targets,
+        bool $tls,
+        ?string $caCert,
+        string $desiredState,
+    ): void {
+        $pending = [];
+        foreach ($targets as $target) {
+            $pending[$target->replica->port] = $target;
+        }
+
+        if ($pending === []) {
+            return;
+        }
+
+        $singleLine = $this->output->isInteractive();
+        $this->output->step(sprintf(
+            'Waiting for Redis cluster state to report replica%s %s as %s',
+            count($pending) === 1 ? '' : 's',
+            $this->formatCompactPortList(array_map('intval', array_keys($pending))),
+            $desiredState,
+        ));
+
+        while ($pending !== []) {
+            try {
+                $rawShards = $this->readClusterShardsWithFallback($seedPort, $tls, $caCert);
+                $shards = $this->clusterShardsParser->parse($rawShards);
+            } catch (\Throwable $exception) {
+                $this->output->progress(
+                    sprintf('Cluster state unavailable from seed %d: %s', $seedPort, $exception->getMessage()),
+                    $singleLine,
+                );
+                usleep(self::REPLICA_STATE_WAIT_POLL_MICROSECONDS);
+                continue;
+            }
+
+            foreach ($pending as $port => $target) {
+                if (!$this->replicaTargetMatchesDesiredClusterState($shards, $target, $desiredState)) {
+                    continue;
+                }
+
+                unset($pending[$port]);
+                $this->output->finishProgress();
+                $this->output->success(sprintf(
+                    'Redis reports replica %d on primary %d as %s',
+                    $target->replica->port,
+                    $target->primaryPort,
+                    $desiredState,
+                ));
+            }
+
+            if ($pending !== []) {
+                $this->output->progress(sprintf(
+                    'Waiting for replica%s %s to be reported %s',
+                    count($pending) === 1 ? '' : 's',
+                    $this->formatCompactPortList(array_map('intval', array_keys($pending))),
+                    $desiredState,
+                ), $singleLine);
+                usleep(self::REPLICA_STATE_WAIT_POLL_MICROSECONDS);
+            }
+        }
+
+        $this->output->finishProgress();
+    }
+
+    /**
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function replicaTargetMatchesDesiredClusterState(array $shards, ReplicaTarget $target, string $desiredState): bool
+    {
+        foreach ($shards as $shard) {
+            if ($shard->master->port !== $target->primaryPort) {
+                continue;
+            }
+
+            foreach ($shard->replicas as $replica) {
+                if ($replica->port !== $target->replica->port) {
+                    continue;
+                }
+
+                if ($desiredState === 'down') {
+                    return $replica->health === 'fail';
+                }
+
+                if ($desiredState === 'up') {
+                    return $replica->role === 'replica' && $replica->health !== 'fail';
+                }
+
+                throw new RuntimeException(sprintf('Unsupported desired replica state: %s', $desiredState));
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param list<ReplicaTarget> $targets
+     * @return list<int>
+     */
+    private function replicaTargetPorts(array $targets): array
+    {
+        $ports = array_map(
+            static fn (ReplicaTarget $target): int => $target->replica->port,
+            $targets,
+        );
+        sort($ports, SORT_NUMERIC);
+
+        return $ports;
+    }
+
+    /**
+     * @param list<ReplicaTarget> $targets
+     */
+    private function formatReplicaTargetList(array $targets): string
+    {
+        $byPrimary = [];
+        foreach ($targets as $target) {
+            $byPrimary[$target->primaryPort][] = $target->replica->port;
+        }
+
+        ksort($byPrimary, SORT_NUMERIC);
+        $parts = [];
+        foreach ($byPrimary as $primaryPort => $replicaPorts) {
+            sort($replicaPorts, SORT_NUMERIC);
+            $parts[] = sprintf('%s under primary %d', $this->formatCompactPortList($replicaPorts), $primaryPort);
+        }
+
+        return implode('; ', $parts);
     }
 
     /**
@@ -2520,7 +2854,21 @@ final class ClusterManager
      */
     private function persistClusterMetadataPortRemoval(?array $metadata, int $port): void
     {
+        $this->persistClusterMetadataPortRemovals($metadata, [$port]);
+    }
+
+    /**
+     * @param array<string, mixed>|null $metadata
+     * @param list<int> $ports
+     */
+    private function persistClusterMetadataPortRemovals(?array $metadata, array $ports): void
+    {
         if (!is_array($metadata)) {
+            return;
+        }
+
+        $removePorts = array_fill_keys($ports, true);
+        if ($removePorts === []) {
             return;
         }
 
@@ -2536,7 +2884,7 @@ final class ClusterManager
             }
 
             $candidatePort = (int) $candidate;
-            if ($candidatePort === $port) {
+            if (isset($removePorts[$candidatePort])) {
                 continue;
             }
 

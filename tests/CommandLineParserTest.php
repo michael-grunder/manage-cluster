@@ -131,6 +131,28 @@ final class CommandLineParserTest extends TestCase
         self::assertSame(7000, $options->primaryPort);
     }
 
+    public function testParsesKillAllWithWait(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'kill', '7000', '--all', '--wait']);
+
+        self::assertSame('kill', $options->action);
+        self::assertTrue($options->all);
+        self::assertTrue($options->wait);
+    }
+
+    public function testParsesKillAllWithPrimaryScope(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'kill', '7000', '--primary', '7000', '--all']);
+
+        self::assertSame('kill', $options->action);
+        self::assertTrue($options->all);
+        self::assertSame(7000, $options->primaryPort);
+    }
+
     public function testParsesRestartReplicaTarget(): void
     {
         $parser = new CommandLineParser();
@@ -151,6 +173,18 @@ final class CommandLineParserTest extends TestCase
         self::assertSame('restart-replica', $options->action);
         self::assertSame([7000], $options->ports);
         self::assertSame(7002, $options->replicaPort);
+        self::assertSame(7000, $options->primaryPort);
+    }
+
+    public function testParsesRestartReplicaAllWithPrimaryScopeAndWait(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'restart-replica', '7000', '--primary', '7000', '--all', '--wait']);
+
+        self::assertSame('restart-replica', $options->action);
+        self::assertTrue($options->all);
+        self::assertTrue($options->wait);
         self::assertSame(7000, $options->primaryPort);
     }
 
@@ -197,14 +231,44 @@ final class CommandLineParserTest extends TestCase
         $parser->parse(['bin/manage-cluster', 'status', '7000', '--primary', '7000']);
     }
 
-    public function testPrimaryConstraintRequiresReplicaTarget(): void
+    public function testPrimaryConstraintRequiresReplicaTargetOrAll(): void
     {
         $parser = new CommandLineParser();
 
         $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('--primary requires --replica.');
+        $this->expectExceptionMessage('--primary requires --replica or --all.');
 
         $parser->parse(['bin/manage-cluster', 'kill', '7000', '--primary', '7000']);
+    }
+
+    public function testAllConflictsWithReplicaTarget(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--all and --replica cannot be used together.');
+
+        $parser->parse(['bin/manage-cluster', 'kill', '7000', '--all', '--replica', '7002']);
+    }
+
+    public function testAllIsRejectedForUnrelatedCommands(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--all can only be used with kill or restart-replica.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--all']);
+    }
+
+    public function testWaitIsRejectedForUnrelatedCommands(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--wait can only be used with kill or restart-replica.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--wait']);
     }
 
     public function testConfigOverrideIsRejectedForUnrelatedCommands(): void
