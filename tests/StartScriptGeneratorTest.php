@@ -52,6 +52,7 @@ final class StartScriptGeneratorTest extends TestCase
         self::assertStringContainsString('START_CONFIG_LINES=(', $script);
         self::assertStringContainsString("  'save \"\"'", $script);
         self::assertStringContainsString("  'enable-debug-command local'", $script);
+        self::assertStringContainsString("printf '%s\\n' 'cluster-allow-replica-migration no'", $script);
         self::assertStringContainsString('for config_line in "${START_CONFIG_LINES[@]}"; do', $script);
         self::assertStringContainsString('cluster_create_command+=(--cluster create)', $script);
         self::assertStringContainsString('cluster_create_command+=(--cluster-replicas "$REPLICAS" --cluster-yes)', $script);

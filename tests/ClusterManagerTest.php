@@ -278,6 +278,7 @@ MESSAGE);
             self::assertIsString($configPath);
             $config = file_get_contents($configPath);
             self::assertIsString($config);
+            self::assertStringContainsString("cluster-allow-replica-migration no\n", $config);
             self::assertStringContainsString("replica-serve-stale-data no\n", $config);
             self::assertStringContainsString("save \"\"\n", $config);
         } finally {

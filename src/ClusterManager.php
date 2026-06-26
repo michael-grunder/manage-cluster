@@ -2223,6 +2223,7 @@ final class ClusterManager
         $configPath = sprintf('%s/redis.conf', $nodeDir);
         $lines = [
             'cluster-enabled yes',
+            'cluster-allow-replica-migration no',
             sprintf('cluster-config-file %s/nodes.conf', $nodeDir),
             sprintf('dir %s', $nodeDir),
             'dbfilename dump.rdb',

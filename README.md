@@ -136,6 +136,10 @@ Behavior notes:
   launch.
 - Redis nodes are launched concurrently and then waited on as a batch before
   cluster topology creation.
+- Managed node configs set `cluster-allow-replica-migration no` by default so
+  Redis does not move replicas between primaries during replica kill/restart
+  tests. Pass `-- cluster-allow-replica-migration yes` to opt back into Redis'
+  automatic replica migration behavior.
 - Startup prints the resolved server flavor/version, such as
   `Redis 8.0.0 (e91a340e)`.
 - Managed node files, logs, configs, and metadata live under

@@ -59,6 +59,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `start` support for passing arbitrary raw `redis-server`/`valkey-server` arguments after `--`, applying them to each started node.
 
 ### Changed
+- Changed generated node configs to set `cluster-allow-replica-migration no` by
+  default so repeated replica kill/restart operations keep replicas attached to
+  their original primaries unless explicitly overridden.
 - Changed `restart-replica --all` to start all selected failed replica
   processes before waiting, allowing parallel replica resynchronization.
 - Made `stop` output more concise by collapsing sequential port lists and grouping identical SHUTDOWN warnings across ports.

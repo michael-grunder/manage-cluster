@@ -268,6 +268,7 @@ final class StartScriptGenerator
             '',
             '  {',
             '    printf \'%s\n\' \'cluster-enabled yes\'',
+            '    printf \'%s\n\' \'cluster-allow-replica-migration no\'',
             '    printf \'cluster-config-file %s\n\' "${node_dir}/nodes.conf"',
             '    printf \'dir %s\n\' "$node_dir"',
             '    printf \'%s\n\' \'dbfilename dump.rdb\'',
