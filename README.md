@@ -302,7 +302,10 @@ Behavior notes:
 - Use `--all` to restart every failed replica in the cluster, or combine it with
   `--primary PORT` to restart every failed replica attached to that primary
 - Add `--wait` to keep the command running until Redis cluster state reports
-  each restarted replica as healthy
+  each restarted replica as healthy; while waiting, progress output includes
+  replica offsets against their primary offset when Redis reports them
+- `--all` starts every selected replica process before waiting for readiness, so
+  multiple replicas can synchronize back in parallel
 - Repeated `--config NAME=VALUE` options run `CONFIG SET` after the replica is
   ready and then `CONFIG REWRITE` so the override is persisted in `redis.conf`
 - Invalid `--replica` targets print the restartable failed replicas grouped by

@@ -739,9 +739,7 @@ final class ClusterManager
 
         if ($options->all) {
             $targets = $this->resolveReplicaTargets($shards, failedOnly: true, primaryPort: $options->primaryPort);
-            foreach ($targets as $target) {
-                $this->restartReplicaPort($target->replica->port, $metadata, $options, $tls, $caCert);
-            }
+            $this->restartReplicaTargets($targets, $metadata, $options, $tls, $caCert);
 
             if ($options->wait) {
                 $this->waitForReplicaTargetsClusterState(
@@ -1046,12 +1044,10 @@ final class ClusterManager
             }
 
             if ($pending !== []) {
-                $this->output->progress(sprintf(
-                    'Waiting for replica%s %s to be reported %s',
-                    count($pending) === 1 ? '' : 's',
-                    $this->formatCompactPortList(array_map('intval', array_keys($pending))),
-                    $desiredState,
-                ), $singleLine);
+                $this->output->progress(
+                    $this->formatReplicaStateWaitProgress($pending, $shards, $desiredState),
+                    $singleLine,
+                );
                 usleep(self::REPLICA_STATE_WAIT_POLL_MICROSECONDS);
             }
         }
@@ -1087,6 +1083,71 @@ final class ClusterManager
         }
 
         return false;
+    }
+
+    /**
+     * @param array<int, ReplicaTarget> $pending
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function formatReplicaStateWaitProgress(array $pending, array $shards, string $desiredState): string
+    {
+        $ports = array_map('intval', array_keys($pending));
+        $message = sprintf(
+            'Waiting for replica%s %s to be reported %s',
+            count($pending) === 1 ? '' : 's',
+            $this->formatCompactPortList($ports),
+            $desiredState,
+        );
+
+        if ($desiredState !== 'up') {
+            return $message;
+        }
+
+        $offsets = $this->formatReplicaOffsetProgress($pending, $shards);
+        if ($offsets === '') {
+            return $message;
+        }
+
+        return sprintf('%s | offsets %s', $message, $offsets);
+    }
+
+    /**
+     * @param array<int, ReplicaTarget> $pending
+     * @param list<ClusterShardStatus> $shards
+     */
+    private function formatReplicaOffsetProgress(array $pending, array $shards): string
+    {
+        $byPort = [];
+        foreach ($shards as $shard) {
+            foreach ($shard->replicas as $replica) {
+                if (!isset($pending[$replica->port])) {
+                    continue;
+                }
+
+                $byPort[$replica->port] = $this->formatReplicaOffset($replica, $shard->master);
+            }
+        }
+
+        if ($byPort === []) {
+            return '';
+        }
+
+        ksort($byPort, SORT_NUMERIC);
+
+        return implode(', ', $byPort);
+    }
+
+    private function formatReplicaOffset(ClusterNodeStatus $replica, ClusterNodeStatus $primary): string
+    {
+        $primaryOffset = max(0, $primary->replicationOffset);
+        $replicaOffset = max(0, $replica->replicationOffset);
+        if ($primaryOffset === 0) {
+            return sprintf('%d %d/%d', $replica->port, $replicaOffset, $primaryOffset);
+        }
+
+        $percent = min(100.0, ($replicaOffset / $primaryOffset) * 100);
+
+        return sprintf('%d %.0f%% (%d/%d)', $replica->port, $percent, $replicaOffset, $primaryOffset);
     }
 
     /**
@@ -1380,6 +1441,49 @@ final class ClusterManager
         $this->redisNodeClient->waitForReady($port, $tls, $caCert);
         $this->applyRestartConfigOverrides($port, $options->restartConfigOverrides, $tls, $caCert);
         $this->output->success(sprintf('Replica %d restarted using %s', $port, basename($configPath)));
+    }
+
+    /**
+     * @param list<ReplicaTarget> $targets
+     * @param array<string, mixed> $metadata
+     */
+    private function restartReplicaTargets(array $targets, array $metadata, CommandLineOptions $options, bool $tls, ?string $caCert): void
+    {
+        $ports = $this->replicaTargetPorts($targets);
+        $redisBinary = $this->resolveRedisBinaryForRestart($metadata, $options);
+        $processes = [];
+
+        $this->output->step(sprintf(
+            'Restarting failed replica%s %s',
+            count($ports) === 1 ? '' : 's',
+            $this->formatCompactPortList($ports),
+        ));
+
+        foreach ($ports as $port) {
+            $configPath = $this->resolveExistingNodeConfigPath($metadata, $port);
+            $process = new Process([$redisBinary, $configPath]);
+            $process->start();
+            $processes[$port] = $process;
+        }
+
+        $this->waitForStartProcesses($processes);
+
+        $this->output->step(sprintf(
+            'Waiting for restarted replica%s %s to accept connections',
+            count($ports) === 1 ? '' : 's',
+            $this->formatCompactPortList($ports),
+        ));
+        $this->redisNodeClient->waitForReadyPorts($ports, $tls, $caCert);
+
+        foreach ($ports as $port) {
+            $this->applyRestartConfigOverrides($port, $options->restartConfigOverrides, $tls, $caCert);
+        }
+
+        $this->output->success(sprintf(
+            'Restarted failed replica process%s %s',
+            count($ports) === 1 ? '' : 'es',
+            $this->formatCompactPortList($ports),
+        ));
     }
 
     private function persistRuntimeConfigBeforeShutdown(int $port, bool $tls, ?string $caCert): void
@@ -3270,6 +3374,9 @@ final class ClusterManager
      */
     private function formatCompactPortList(array $ports): string
     {
+        $ports = array_values(array_unique($ports));
+        sort($ports, SORT_NUMERIC);
+
         return PortRangeFormatter::formatCompactList($ports);
     }
 

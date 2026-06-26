@@ -204,6 +204,54 @@ MESSAGE);
         self::assertFalse($method->invoke($manager, $this->clusterShardsFixture(), $healthyTarget, 'down'));
     }
 
+    public function testReplicaStateWaitProgressSortsPortsAndShowsOffsetsForRestart(): void
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $method = $reflection->getMethod('formatReplicaStateWaitProgress');
+
+        $pending = [
+            7005 => new ReplicaTarget($this->node(7005, 'replica', 'fail'), 7000),
+            7003 => new ReplicaTarget($this->node(7003, 'replica', 'fail'), 7000),
+            7004 => new ReplicaTarget($this->node(7004, 'replica', 'fail'), 7000),
+        ];
+        $shards = [
+            new ClusterShardStatus(
+                slotStart: 0,
+                slotEnd: 16383,
+                master: $this->node(7000, 'master', 'online', 1_000),
+                replicas: [
+                    $this->node(7005, 'replica', 'online', 250),
+                    $this->node(7003, 'replica', 'online', 500),
+                    $this->node(7004, 'replica', 'online', 1_000),
+                ],
+            ),
+        ];
+
+        self::assertSame(
+            'Waiting for replicas 7003-7005 to be reported up | offsets 7003 50% (500/1000), 7004 100% (1000/1000), 7005 25% (250/1000)',
+            $method->invoke($manager, $pending, $shards, 'up'),
+        );
+    }
+
+    public function testReplicaStateWaitProgressOmitsOffsetsForKillWait(): void
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $method = $reflection->getMethod('formatReplicaStateWaitProgress');
+
+        $pending = [
+            7005 => new ReplicaTarget($this->node(7005, 'replica', 'online'), 7000),
+            7003 => new ReplicaTarget($this->node(7003, 'replica', 'online'), 7000),
+            7004 => new ReplicaTarget($this->node(7004, 'replica', 'online'), 7000),
+        ];
+
+        self::assertSame(
+            'Waiting for replicas 7003-7005 to be reported down',
+            $method->invoke($manager, $pending, $this->clusterShardsFixture(), 'down'),
+        );
+    }
+
     public function testWriteNodeConfigurationPersistsStartConfigDirectives(): void
     {
         $manager = $this->newClusterManagerWithoutConstructor();
@@ -343,7 +391,7 @@ MESSAGE);
         ];
     }
 
-    private function node(int $port, string $role, string $health): ClusterNodeStatus
+    private function node(int $port, string $role, string $health, int $replicationOffset = 0): ClusterNodeStatus
     {
         return new ClusterNodeStatus(
             id: str_pad((string) $port, 40, '0'),
@@ -351,7 +399,7 @@ MESSAGE);
             port: $port,
             endpoint: '',
             role: $role,
-            replicationOffset: 0,
+            replicationOffset: $replicationOffset,
             health: $health,
         );
     }

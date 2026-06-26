@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replicas under `--primary PORT`, can be stopped or restarted in one command.
 - Added `--wait` to `kill` and `restart-replica` so replica operations can block
   until Redis cluster state reports each target as down or healthy.
+- Added replication offset progress to `restart-replica --wait` output while
+  Redis cluster state is converging.
 - Added `start --primaries N` to choose the primary count for new clusters, with single-port expansion now using `primaries * (replicas + 1)` and defaulting to 3 primaries.
 - Added concurrent Redis node launch and batch readiness waiting for `start`, reducing startup time for larger local clusters.
 - Added `chaos`/`--chaos` action for serialized, stateful replica churn, with
@@ -57,6 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `start` support for passing arbitrary raw `redis-server`/`valkey-server` arguments after `--`, applying them to each started node.
 
 ### Changed
+- Changed `restart-replica --all` to start all selected failed replica
+  processes before waiting, allowing parallel replica resynchronization.
 - Made `stop` output more concise by collapsing sequential port lists and grouping identical SHUTDOWN warnings across ports.
 - Updated `start` output to collapse sequential port lists into compact ranges, reusing the same shared port-range formatter as `stop`.
 - Updated `stop` to issue Redis shutdown commands in parallel and then wait for all targeted nodes to exit as a batch.
