@@ -74,7 +74,7 @@ final class CommandLineParser
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'fill' => [
-            ['--size SIZE', 'Required target size: bytes, k, m, g, or t'],
+            ['--size SIZE', 'Required target size: bytes, k, m, g, or t; decimals accepted'],
             ['--types CSV', 'Limit generated keys to string,set,list,hash,zset'],
             ['--members N', 'Members per composite key (default: 8 when set explicitly)'],
             ['--member-size N', 'Bytes per member or string payload (default: 256 when set explicitly)'],
@@ -160,7 +160,7 @@ final class CommandLineParser
         ],
         'fill' => [
             'bin/manage-cluster fill --size 1g',
-            'bin/manage-cluster fill --size 5g --keys 20000',
+            'bin/manage-cluster fill --size 2.5g --keys 20000',
             'bin/manage-cluster fill 7000 --size 256m --types string,set --members 32 --member-size 2048',
             'bin/manage-cluster fill 7000 --size 512m --pin-primary 7003',
         ],
@@ -957,11 +957,11 @@ final class CommandLineParser
             throw new InvalidArgumentException('--size must not be empty.');
         }
 
-        if (!preg_match('/^(?<amount>\d+)(?<unit>[kmgt]?b?)?$/', $normalized, $matches)) {
+        if (!preg_match('/^(?<amount>(?:\d+(?:\.\d+)?|\.\d+))(?<unit>[kmgt]?b?)?$/', $normalized, $matches)) {
             throw new InvalidArgumentException(sprintf('Invalid --size value: %s', $value));
         }
 
-        $amount = (int) $matches['amount'];
+        $amount = (float) $matches['amount'];
         $unit = $matches['unit'] ?? '';
 
         $multiplier = match ($unit) {
@@ -973,7 +973,12 @@ final class CommandLineParser
             default => throw new InvalidArgumentException(sprintf('Invalid --size unit: %s', $value)),
         };
 
-        return $amount * $multiplier;
+        $bytes = $amount * $multiplier;
+        if (!is_finite($bytes) || $bytes > PHP_INT_MAX) {
+            throw new InvalidArgumentException(sprintf('--size is too large: %s', $value));
+        }
+
+        return (int) ceil($bytes);
     }
 
     /**

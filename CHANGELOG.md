@@ -61,6 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `start` support for passing arbitrary raw `redis-server`/`valkey-server` arguments after `--`, applying them to each started node.
 
 ### Changed
+- Updated `fill --size` parsing to accept decimal amounts such as `2.5g` and
+  `18.5m`.
 - Changed generated node configs to set `cluster-allow-replica-migration no` by
   default so repeated replica kill/restart operations keep replicas attached to
   their original primaries unless explicitly overridden.

@@ -419,6 +419,36 @@ final class CommandLineParserTest extends TestCase
         self::assertSame(7003, $options->fill->pinPrimaryPort);
     }
 
+    public function testParsesFillWithFractionalGigabyteSize(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'fill', '--size', '2.5g']);
+
+        self::assertNotNull($options->fill);
+        self::assertSame((int) (2.5 * (1024 ** 3)), $options->fill->sizeBytes);
+    }
+
+    public function testParsesFillWithFractionalMegabyteSize(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'fill', '--size', '18.5m']);
+
+        self::assertNotNull($options->fill);
+        self::assertSame((int) (18.5 * (1024 ** 2)), $options->fill->sizeBytes);
+    }
+
+    public function testParsesFillWithFractionalSizeRoundedUpToByte(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'fill', '--size', '.1k']);
+
+        self::assertNotNull($options->fill);
+        self::assertSame(103, $options->fill->sizeBytes);
+    }
+
     public function testFillDerivesAdaptiveShapeFromCustomKeyTarget(): void
     {
         $parser = new CommandLineParser();

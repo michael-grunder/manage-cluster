@@ -218,14 +218,15 @@ Generates synthetic keys until total primary `used_memory` reaches a target.
 
 ```bash
 bin/manage-cluster fill --size 1g
-bin/manage-cluster fill --size 5g --keys 20000
+bin/manage-cluster fill --size 2.5g --keys 20000
 bin/manage-cluster fill 7000 --size 256m --types string,set --members 32 --member-size 2048
 bin/manage-cluster fill 7000 --size 512m --pin-primary 7003
 ```
 
 Useful options:
 
-- `--size SIZE` is required and accepts raw bytes or `k|m|g|t` suffixes
+- `--size SIZE` is required and accepts integer or decimal raw bytes, or
+  `k|m|g|t` suffixes such as `18.5m`
 - `--types CSV` limits key generation to `string,set,list,hash,zset`
 - `--members N` sets entries per composite key
 - `--member-size N` sets bytes per string payload or composite member payload
