@@ -29,5 +29,7 @@ final class ShellCompletionGeneratorTest extends TestCase
         self::assertStringContainsString("'--primaries'", $script);
         self::assertStringContainsString("'bash'", $script);
         self::assertStringContainsString("'zsh'", $script);
+        self::assertStringContainsString('compdef _manage_cluster manage-cluster', $script);
+        self::assertStringNotContainsString('_manage_cluster "$@"', $script);
     }
 }

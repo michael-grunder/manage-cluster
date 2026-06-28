@@ -168,7 +168,7 @@ _{$functionName}()
     esac
 }
 
-_{$functionName} "\$@"
+compdef _{$functionName} {$commandName}
 ZSH;
     }
 
