@@ -20,6 +20,7 @@ final class CommandLineParserTest extends TestCase
         self::assertStringContainsString('start', $usage);
         self::assertStringContainsString('list', $usage);
         self::assertStringContainsString('chaos', $usage);
+        self::assertStringContainsString('completions', $usage);
         self::assertStringContainsString('help', $usage);
     }
 
@@ -49,6 +50,15 @@ final class CommandLineParserTest extends TestCase
         self::assertStringContainsString('bin/manage-cluster chaos SEED_PORT', $usage);
         self::assertStringContainsString('--categories LIST', $usage);
         self::assertStringContainsString('bin/manage-cluster chaos 7000 --dry-run', $usage);
+    }
+
+    public function testContextualUsageForCompletionsIncludesExamples(): void
+    {
+        $usage = CommandLineParser::contextualUsage('completions');
+
+        self::assertStringContainsString('bin/manage-cluster completions bash|zsh', $usage);
+        self::assertStringContainsString('bin/manage-cluster completions bash', $usage);
+        self::assertStringContainsString('bin/manage-cluster completions zsh', $usage);
     }
 
     public function testInferRequestedActionFindsPositionalAction(): void
@@ -331,6 +341,27 @@ final class CommandLineParserTest extends TestCase
 
         self::assertSame('list', $options->action);
         self::assertSame([], $options->ports);
+    }
+
+    public function testParsesCompletionsActionWithRequiredShell(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'completions', 'zsh']);
+
+        self::assertSame('completions', $options->action);
+        self::assertSame([], $options->ports);
+        self::assertSame('zsh', $options->completionShell);
+    }
+
+    public function testCompletionsRequiresSupportedShell(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unsupported completion shell: powershell. Expected one of: bash, zsh.');
+
+        $parser->parse(['bin/manage-cluster', 'completions', 'powershell']);
     }
 
     public function testParsesStatusWithoutPorts(): void

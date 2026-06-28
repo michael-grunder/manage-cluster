@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 ### Added
+- Added `completions bash|zsh` to generate shell completion scripts for the
+  CLI.
 - Added `kill --method METHOD` with `shutdown`, `nosave`, and selected
   process-signal methods for deliberately crashing managed Redis nodes.
 - Added persistence for `start -- NAME VALUE` Redis config directive pairs by

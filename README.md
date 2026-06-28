@@ -25,6 +25,7 @@ cluster management.
 - Restart an interactively selected failed replica or a specific failed replica port from saved node metadata.
 - Run serialized replica-chaos loops that kill, restart, and add replicas while
   waiting for the cluster to converge between each step.
+- Generate shell completion scripts for supported shells.
 - Start TLS-only local clusters with ephemeral certificates.
 - Generate a standalone startup shell script instead of starting immediately.
 - Build a single-file PHAR binary for distribution.
@@ -371,6 +372,18 @@ bin/manage-cluster help
 bin/manage-cluster help start
 bin/manage-cluster help fill
 ```
+
+### `completions`
+
+Generate a shell completion script:
+
+```bash
+bin/manage-cluster completions bash
+bin/manage-cluster completions zsh
+```
+
+Source the generated script from your shell startup files or install it into the
+appropriate completion directory for your shell.
 
 ## State Directory
 

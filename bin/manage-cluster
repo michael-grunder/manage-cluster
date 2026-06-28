@@ -14,6 +14,7 @@ use Mgrunder\CreateCluster\ConsoleOutput;
 use Mgrunder\CreateCluster\CommandLineParser;
 use Mgrunder\CreateCluster\ManagedClusterSummaryRenderer;
 use Mgrunder\CreateCluster\RedisNodeClient;
+use Mgrunder\CreateCluster\ShellCompletionGenerator;
 use Mgrunder\CreateCluster\StartScriptGenerator;
 use Mgrunder\CreateCluster\SystemInspector;
 use Mgrunder\CreateCluster\TlsMaterialGenerator;
@@ -45,6 +46,17 @@ try {
     fwrite(STDERR, $e->getMessage() . PHP_EOL . PHP_EOL);
     fwrite(STDERR, CommandLineParser::contextualUsage($action, $interactive) . PHP_EOL);
     exit(1);
+}
+
+$commandName = basename($argv[0] ?? 'manage-cluster') ?: 'manage-cluster';
+if ($options->action === 'completions') {
+    if ($options->completionShell === null) {
+        fwrite(STDERR, 'Missing completion shell.' . PHP_EOL);
+        exit(1);
+    }
+
+    fwrite(STDOUT, (new ShellCompletionGenerator())->generate($options->completionShell, $commandName) . PHP_EOL);
+    exit(0);
 }
 
 $output = new ConsoleOutput();

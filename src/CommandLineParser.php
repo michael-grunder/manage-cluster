@@ -11,7 +11,7 @@ final class CommandLineParser
     /**
      * @var list<string>
      */
-    private const array ACTIONS = ['start', 'stop', 'kill', 'rebalance', 'status', 'list', 'flush', 'fill', 'add-replica', 'restart-replica', 'chaos'];
+    private const array ACTIONS = ['start', 'stop', 'kill', 'rebalance', 'status', 'list', 'flush', 'fill', 'add-replica', 'restart-replica', 'chaos', 'completions'];
 
     /**
      * @var array<string, string>
@@ -28,6 +28,7 @@ final class CommandLineParser
         'add-replica' => 'Add a new replica to a selected primary',
         'restart-replica' => 'Restart one or more failed replicas from cluster metadata',
         'chaos' => 'Run serialized replica-focused cluster churn for client testing',
+        'completions' => 'Generate a shell completion script',
     ];
 
     /**
@@ -115,6 +116,7 @@ final class CommandLineParser
             ['--unsafe', 'Permit lower-redundancy actions normally avoided'],
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
+        'completions' => [],
     ];
 
     /**
@@ -183,6 +185,10 @@ final class CommandLineParser
             'bin/manage-cluster chaos 7000 --interval 8 --watch',
             'bin/manage-cluster chaos 7000 --dry-run',
         ],
+        'completions' => [
+            'bin/manage-cluster completions bash',
+            'bin/manage-cluster completions zsh',
+        ],
     ];
 
     /**
@@ -238,6 +244,7 @@ final class CommandLineParser
         $wait = false;
         $killMethod = KillMethod::Shutdown;
         $killMethodProvided = false;
+        $completionShell = null;
 
         $primaries = 3;
         $primariesProvided = false;
@@ -297,8 +304,9 @@ final class CommandLineParser
                 case '--add-replica':
                 case '--restart-replica':
                 case '--chaos':
+                case '--completions':
                     if ($action !== null) {
-                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --kill, --rebalance, --status, --list, --flush, --fill, --add-replica, --restart-replica, or --chaos.');
+                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --kill, --rebalance, --status, --list, --flush, --fill, --add-replica, --restart-replica, --chaos, or --completions.');
                     }
 
                     $action = ltrim($arg, '-');
@@ -468,7 +476,7 @@ final class CommandLineParser
                             break;
                         }
 
-                        throw new InvalidArgumentException(sprintf('Specify start/stop/kill/rebalance/status/list/flush/fill/add-replica/restart-replica/chaos (or --start/--stop/--kill/--rebalance/--status/--list/--flush/--fill/--add-replica/--restart-replica/--chaos) before ports (got: %s).', $arg));
+                        throw new InvalidArgumentException(sprintf('Specify start/stop/kill/rebalance/status/list/flush/fill/add-replica/restart-replica/chaos/completions (or --start/--stop/--kill/--rebalance/--status/--list/--flush/--fill/--add-replica/--restart-replica/--chaos/--completions) before ports (got: %s).', $arg));
                     }
 
                     $portTokens[] = $arg;
@@ -477,7 +485,7 @@ final class CommandLineParser
         }
 
         if ($action === null) {
-            throw new InvalidArgumentException('Missing action: use start/stop/kill/rebalance/status/list/flush/fill/add-replica/restart-replica/chaos (or --start/--stop/--kill/--rebalance/--status/--list/--flush/--fill/--add-replica/--restart-replica/--chaos).');
+            throw new InvalidArgumentException('Missing action: use start/stop/kill/rebalance/status/list/flush/fill/add-replica/restart-replica/chaos/completions (or --start/--stop/--kill/--rebalance/--status/--list/--flush/--fill/--add-replica/--restart-replica/--chaos/--completions).');
         }
 
         if ($action === 'start' && $replicas < 0) {
@@ -641,9 +649,25 @@ final class CommandLineParser
         }
 
         $ports = [];
-        if ($portTokens !== []) {
+        if ($action === 'completions') {
+            if (count($portTokens) !== 1) {
+                throw new InvalidArgumentException('completions expects exactly one shell: bash or zsh.');
+            }
+
+            $completionShell = strtolower($portTokens[0]);
+            if (!in_array($completionShell, ShellCompletionGenerator::supportedShells(), true)) {
+                throw new InvalidArgumentException(sprintf(
+                    'Unsupported completion shell: %s. Expected one of: %s.',
+                    $portTokens[0],
+                    implode(', ', ShellCompletionGenerator::supportedShells()),
+                ));
+            }
+
+            $ports = [];
+        } elseif ($portTokens !== []) {
             $ports = PortParser::parse($portTokens);
         }
+
         if ($action === 'start' && count($ports) === 1) {
             $ports = $this->expandSingleStartPort($ports[0], $primaries, $replicas);
         } elseif ($action === 'start' && $ports !== [] && !$primariesProvided) {
@@ -653,7 +677,7 @@ final class CommandLineParser
             }
         }
 
-        if (!in_array($action, ['fill', 'status', 'list'], true) && $ports === []) {
+        if (!in_array($action, ['fill', 'status', 'list', 'completions'], true) && $ports === []) {
             throw new InvalidArgumentException('No ports provided');
         }
 
@@ -683,6 +707,10 @@ final class CommandLineParser
 
         if ($action === 'chaos' && count($ports) !== 1) {
             throw new InvalidArgumentException('chaos expects exactly one seed port.');
+        }
+
+        if ($action === 'completions' && count($ports) !== 0) {
+            throw new InvalidArgumentException('completions does not accept seed ports.');
         }
 
         $fillOptions = null;
@@ -766,7 +794,40 @@ final class CommandLineParser
             all: $all,
             wait: $wait,
             killMethod: $killMethod,
+            completionShell: $completionShell,
         );
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function actionNames(): array
+    {
+        return self::ACTIONS;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function actionSummaries(): array
+    {
+        return self::ACTION_SUMMARIES;
+    }
+
+    /**
+     * @return list<array{0:string,1:string}>
+     */
+    public static function commandOptions(string $action): array
+    {
+        return self::COMMAND_OPTIONS[$action] ?? [];
+    }
+
+    /**
+     * @return list<array{0:string,1:string}>
+     */
+    public static function globalOptionSpecs(): array
+    {
+        return self::globalOptions();
     }
 
     public static function usage(bool $interactive = false): string
@@ -796,6 +857,7 @@ final class CommandLineParser
         $lines[] = '  bin/manage-cluster status 7000 --watch';
         $lines[] = '  bin/manage-cluster list';
         $lines[] = '  bin/manage-cluster fill --size 1g';
+        $lines[] = '  bin/manage-cluster completions zsh';
         $lines[] = '  bin/manage-cluster help start';
         $lines[] = '';
         $lines[] = 'Run `bin/manage-cluster help <command>` for command-specific help.';
@@ -1145,6 +1207,7 @@ final class CommandLineParser
             'add-replica' => 'bin/manage-cluster add-replica SEED_PORT [--port PORT]',
             'restart-replica' => 'bin/manage-cluster restart-replica SEED_PORT [--replica PORT] [--primary PORT] [--all] [--wait] [--config NAME=VALUE]',
             'chaos' => 'bin/manage-cluster chaos SEED_PORT [--categories LIST] [--interval SECONDS] [--max-events N] [--dry-run] [--watch]',
+            'completions' => 'bin/manage-cluster completions bash|zsh',
             default => 'bin/manage-cluster [OPTIONS] <COMMAND> [ARGS]',
         };
     }
