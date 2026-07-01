@@ -1,26 +1,79 @@
-## General instructions
+# Agent Instructions
 
-* Prefer modern PHP syntax and idioms. We won't run this on anything < 8.4.
-* Prefer modularity and generic code over duplication unless there is a good
-  performance reason for it.
-* Prefer defensive programming. Never ignore return values when they can fail
-  unless there is a compelling reason (rarely we may not care about a failure).
-* Prefer using idiomatic composer packages where appropriate over hand rolled solutions.
-  There can be exceptions such as the package bing much heavier weight than needed or
-  if there are specific performance or integration conflcts.
-* When adding features never just tack them on to existing code and pepper
-  specific handling code all around the codebase for this new feature. Instead
-  we always want to maingain a clean architecture, so if the feature requires
-  a sizeable redesign to do so, always prefer that.
-* Wrappiing `phpredis` in a helper class is fine, but don't dispatch via
-  `__call` especially for any method that takes a reference (e.g. `scan`).
-* After modifying source code make sure they compile. e.g quick-lint-js for
-  JS/TS, pylint for Python, etc, php -l for PHP.
-* Run vendor/bin/phpstan analyze and fix any reported issues if phpstan is used in the
-  project.
-* Run vendor/bin/phpunit to make sure tests pass if we're using phpunit.
-* Remember to update `README.md` if the changes change what is documented.
-* After each change create or add `CHANGELOG.md`. As changes are added they go
-  under `## Unreleased` and then at time of tag will be formalized. Within each
-  version group changes into sections like `### Fixed`, `### Added`,
-  `### Changed`, `### Deprecated`, `### Removed`.
+## Scope
+
+These instructions apply to the whole repository. Keep this file focused on
+durable project guidance: repository shape, coding standards, verification
+steps, and documentation expectations.
+
+## Project Snapshot
+
+`manage-cluster` is a PHP 8.4+ CLI for managing local Redis or Valkey Cluster
+instances used in development and testing. The main executable is
+`bin/manage-cluster`; implementation code lives in `src/`; PHPUnit tests live
+in `tests/`.
+
+Composer dependencies are intentional project choices. Prefer idiomatic,
+maintained Composer packages when they fit the problem better than custom code,
+but avoid adding heavy dependencies for small or isolated tasks.
+
+## Architecture
+
+Preserve the existing modular design. New behavior should live behind cohesive
+classes, value objects, parsers, renderers, or orchestration methods that match
+the surrounding code instead of scattered feature-specific conditionals.
+
+When a feature pressures the existing design, prefer a clean redesign over
+tacking special handling onto unrelated modules. Keep CLI parsing, Redis
+process orchestration, state storage, rendering, and test-support behavior in
+their existing ownership boundaries unless the change explicitly requires
+moving those boundaries.
+
+Wrapping `phpredis` in helper classes is fine, but do not dispatch Redis methods
+through `__call`, especially methods that take references such as `scan`.
+Expose explicit wrapper methods so signatures and reference behavior stay clear
+to PHPStan and readers.
+
+## PHP Style
+
+Use modern PHP 8.4+ syntax and idioms. Prefer typed properties, constructor
+promotion, `readonly` where useful, enums for closed sets, strict value objects,
+and clear return types.
+
+Favor generic, reusable code over duplication unless there is a concrete
+performance or readability reason to keep the code local.
+
+Code defensively. Check return values from operations that can fail, validate
+external data from Redis, the filesystem, JSON, subprocesses, and user input,
+and surface actionable errors instead of silently continuing.
+
+## Tests and Verification
+
+After changing PHP source, make sure changed files compile. Useful checks are:
+
+```bash
+php -l bin/manage-cluster
+php -l src/*.php
+vendor/bin/phpstan analyze
+vendor/bin/phpunit
+```
+
+Run the smallest relevant checks while iterating, then run the broader PHPStan
+and PHPUnit checks before handing off when the change touches source code. Fix
+reported issues rather than documenting them away.
+
+For non-PHP files, use the appropriate project or ecosystem checker when one is
+available, such as `bash -n` for shell scripts or a JS/TS linter if JavaScript
+or TypeScript is introduced.
+
+## Documentation
+
+Update `README.md` when a change affects documented behavior, commands,
+options, setup, examples, or release/build instructions.
+
+Keep `CHANGELOG.md` updated for every repository-visible change. Add entries
+under `## Unreleased` and group them with Keep a Changelog section headings:
+`### Added`, `### Changed`, `### Deprecated`, `### Removed`, and `### Fixed`.
+
+Documentation-only changes do not require PHP compilation checks, but still
+review the rendered Markdown structure for clarity and broken formatting.
