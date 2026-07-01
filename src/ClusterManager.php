@@ -26,6 +26,7 @@ final class ClusterManager
         private readonly ClusterStatusRenderer $clusterStatusRenderer,
         private readonly ClusterStatusTuiRenderer $clusterStatusTuiRenderer,
         private readonly ManagedClusterSummaryRenderer $managedClusterSummaryRenderer,
+        private readonly ManagedClusterSummaryTuiRenderer $managedClusterSummaryTuiRenderer,
         private readonly ClusterTreeSelector $clusterTreeSelector,
         private readonly ConsoleOutput $output,
     ) {
@@ -398,9 +399,12 @@ final class ClusterManager
     public function status(CommandLineOptions $options): void
     {
         if ($options->ports === []) {
-            $this->renderManagedClusterSummary(watchMode: $options->watch, runningOnly: false);
+            $selectedSeedPort = $this->renderManagedClusterSummary(watchMode: $options->watch, runningOnly: false);
+            if ($selectedSeedPort === null) {
+                return;
+            }
 
-            return;
+            $options = $this->withPorts($options, [$selectedSeedPort]);
         }
 
         $seedPort = $options->ports[0];
@@ -3327,8 +3331,15 @@ final class ClusterManager
         }
     }
 
-    private function renderManagedClusterSummary(bool $watchMode, bool $runningOnly): void
+    private function renderManagedClusterSummary(bool $watchMode, bool $runningOnly): ?int
     {
+        if ($watchMode && $this->managedClusterSummaryTuiRenderer->supportsInteractiveWatch()) {
+            return $this->managedClusterSummaryTuiRenderer->watch(
+                clusterProvider: fn (): array => $this->buildManagedClusterSummaries($runningOnly),
+                runningOnly: $runningOnly,
+            );
+        }
+
         while (true) {
             $clusters = $this->buildManagedClusterSummaries($runningOnly);
 
@@ -3344,11 +3355,44 @@ final class ClusterManager
             ));
 
             if (!$watchMode) {
-                return;
+                return null;
             }
 
             usleep(1_000_000);
         }
+    }
+
+    /**
+     * @param list<int> $ports
+     */
+    private function withPorts(CommandLineOptions $options, array $ports): CommandLineOptions
+    {
+        return new CommandLineOptions(
+            action: $options->action,
+            ports: $ports,
+            replicaPort: $options->replicaPort,
+            primaryPort: $options->primaryPort,
+            restartConfigOverrides: $options->restartConfigOverrides,
+            generatedScriptPath: $options->generatedScriptPath,
+            primaries: $options->primaries,
+            replicas: $options->replicas,
+            redisBinary: $options->redisBinary,
+            redisCliBinary: $options->redisCliBinary,
+            announceIp: $options->announceIp,
+            tls: $options->tls,
+            tlsDays: $options->tlsDays,
+            tlsRsaBits: $options->tlsRsaBits,
+            stateDir: $options->stateDir,
+            watch: $options->watch,
+            fill: $options->fill,
+            chaos: $options->chaos,
+            startConfigDirectives: $options->startConfigDirectives,
+            startServerArgs: $options->startServerArgs,
+            all: $options->all,
+            wait: $options->wait,
+            killMethod: $options->killMethod,
+            completionShell: $options->completionShell,
+        );
     }
 
     /**

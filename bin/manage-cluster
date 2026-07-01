@@ -13,6 +13,7 @@ use Mgrunder\CreateCluster\ClusterTreeViewBuilder;
 use Mgrunder\CreateCluster\ConsoleOutput;
 use Mgrunder\CreateCluster\CommandLineParser;
 use Mgrunder\CreateCluster\ManagedClusterSummaryRenderer;
+use Mgrunder\CreateCluster\ManagedClusterSummaryTuiRenderer;
 use Mgrunder\CreateCluster\RedisNodeClient;
 use Mgrunder\CreateCluster\ShellCompletionGenerator;
 use Mgrunder\CreateCluster\StartScriptGenerator;
@@ -71,6 +72,7 @@ $manager = new ClusterManager(
     clusterStatusRenderer: new ClusterStatusRenderer(),
     clusterStatusTuiRenderer: new ClusterStatusTuiRenderer(),
     managedClusterSummaryRenderer: new ManagedClusterSummaryRenderer(),
+    managedClusterSummaryTuiRenderer: new ManagedClusterSummaryTuiRenderer(),
     clusterTreeSelector: new ClusterTreeSelector(new ClusterTreeViewBuilder()),
     output: $output,
 );

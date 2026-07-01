@@ -174,6 +174,7 @@ the configured state directory instead.
 ```bash
 bin/manage-cluster status
 bin/manage-cluster status 7000
+bin/manage-cluster status --watch
 bin/manage-cluster status 7000 --watch
 ```
 
@@ -183,6 +184,9 @@ Behavior notes:
   managed clusters
 - Uses a `php-tui` table when stdout is a TTY
 - Falls back to plain text for non-interactive output
+- With no seed port, `--watch` opens an interactive `php-tui` overview; use
+  Up/Down or `j`/`k` to select a running cluster and Enter to open that
+  cluster's `status PORT --watch` view
 - Shows per-node used memory; unreachable nodes render `-`
 - `--watch` refreshes once per second in a fullscreen boxed TUI and relies on incremental redraws to avoid full-frame flashing
 - `--watch` also shows an independently probed per-node latency column; nodes that have not answered the latest background probe yet render as `pending`, slow/unresponsive probes render `timeout`, and hard failures render `down`

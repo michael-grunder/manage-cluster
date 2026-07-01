@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 ### Added
+- Added an interactive `php-tui` overview for `status --watch` without a seed
+  port, allowing Up/Down selection of a running managed cluster and Enter to
+  open that cluster's `status PORT --watch` view.
 - Added `completions bash|zsh` to generate shell completion scripts for the
   CLI.
 - Added `kill --method METHOD` with `shutdown`, `nosave`, and selected
