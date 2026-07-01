@@ -119,6 +119,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed the redundant `Makefile`; PHAR builds now go through `composer build-phar`.
 
 ### Fixed
+- Fixed current PHPStan findings around redundant parser/manager checks and TLS
+  metadata return-shape narrowing.
 - Fixed PHPStan max-level issues by validating decoded JSON/Redis data, narrowing
   resource and reflection helper types, and declaring non-empty fill key types.
 - Fixed replica runtime config changes being lost across `kill` plus

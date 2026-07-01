@@ -161,7 +161,7 @@ final class ClusterManager
     public function generateStartScript(CommandLineOptions $options): void
     {
         $path = $options->generatedScriptPath;
-        if ($path === null || $path === '') {
+        if ($path === null) {
             throw new RuntimeException('Missing generated script path.');
         }
 
@@ -2353,12 +2353,20 @@ final class ClusterManager
         $caCert = is_array($metadata) && is_array($metadata['tls_material'] ?? null)
             ? (is_string($metadata['tls_material']['ca_cert'] ?? null) ? $metadata['tls_material']['ca_cert'] : null)
             : null;
-        $tlsMaterial = is_array($metadata) && is_array($metadata['tls_material'] ?? null)
+        $tlsMaterial = null;
+        if (
+            is_array($metadata)
+            && is_array($metadata['tls_material'] ?? null)
             && is_string($metadata['tls_material']['ca_cert'] ?? null)
             && is_string($metadata['tls_material']['server_cert'] ?? null)
             && is_string($metadata['tls_material']['server_key'] ?? null)
-            ? $metadata['tls_material']
-            : null;
+        ) {
+            $tlsMaterial = [
+                'ca_cert' => $metadata['tls_material']['ca_cert'],
+                'server_cert' => $metadata['tls_material']['server_cert'],
+                'server_key' => $metadata['tls_material']['server_key'],
+            ];
+        }
 
         $modes = [$defaultTls, !$defaultTls];
         foreach ($modes as $mode) {

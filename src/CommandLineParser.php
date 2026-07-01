@@ -672,7 +672,7 @@ final class CommandLineParser
             $ports = $this->expandSingleStartPort($ports[0], $primaries, $replicas);
         } elseif ($action === 'start' && $ports !== [] && !$primariesProvided) {
             $groupSize = $replicas + 1;
-            if ($groupSize > 0 && count($ports) % $groupSize === 0) {
+            if (count($ports) % $groupSize === 0) {
                 $primaries = (int) (count($ports) / $groupSize);
             }
         }
@@ -1032,7 +1032,6 @@ final class CommandLineParser
             'm', 'mb' => 1024 ** 2,
             'g', 'gb' => 1024 ** 3,
             't', 'tb' => 1024 ** 4,
-            default => throw new InvalidArgumentException(sprintf('Invalid --size unit: %s', $value)),
         };
 
         $bytes = $amount * $multiplier;
