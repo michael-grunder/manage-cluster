@@ -1,0 +1,11 @@
+name: manage-cluster
+mode: bin
+php-version: "8.5"
+optimize: 2
+job: 8
+build-dir: build
+cxx-std: c++17
+
+sources:
+  - src/
+  - bin/
