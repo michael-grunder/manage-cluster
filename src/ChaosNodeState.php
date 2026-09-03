@@ -7,7 +7,7 @@ namespace Mgrunder\CreateCluster;
 final readonly class ChaosNodeState
 {
     /**
-     * @param list<string> $slotRanges
+     * @param list<SlotRange> $slotRanges
      */
     public function __construct(
         public int $port,

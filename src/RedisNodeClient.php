@@ -252,6 +252,151 @@ final class RedisNodeClient
         }
     }
 
+    public function clusterSetSlotImporting(int $port, bool $tls, ?string $caCert, int $slot, string $sourceNodeId): void
+    {
+        $this->clusterSetSlot($port, $tls, $caCert, $slot, 'IMPORTING', $sourceNodeId);
+    }
+
+    public function clusterSetSlotMigrating(int $port, bool $tls, ?string $caCert, int $slot, string $destinationNodeId): void
+    {
+        $this->clusterSetSlot($port, $tls, $caCert, $slot, 'MIGRATING', $destinationNodeId);
+    }
+
+    public function clusterSetSlotNode(int $port, bool $tls, ?string $caCert, int $slot, string $ownerNodeId): void
+    {
+        $this->clusterSetSlot($port, $tls, $caCert, $slot, 'NODE', $ownerNodeId);
+    }
+
+    public function clusterSetSlotStable(int $port, bool $tls, ?string $caCert, int $slot): void
+    {
+        $this->clusterSetSlot($port, $tls, $caCert, $slot, 'STABLE', null);
+    }
+
+    public function clusterCountKeysInSlot(int $port, bool $tls, ?string $caCert, int $slot): int
+    {
+        $redis = $this->connectToNode($port, $tls, $caCert);
+
+        try {
+            $response = $redis->rawCommand('CLUSTER', 'COUNTKEYSINSLOT', (string) $slot);
+        } finally {
+            $redis->close();
+        }
+
+        if (is_int($response)) {
+            return $response;
+        }
+
+        if (is_string($response) && preg_match('/^\d+$/', $response) === 1) {
+            return (int) $response;
+        }
+
+        throw new RuntimeException(sprintf(
+            'CLUSTER COUNTKEYSINSLOT %d returned an unexpected response on port %d.',
+            $slot,
+            $port,
+        ));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function clusterGetKeysInSlot(int $port, bool $tls, ?string $caCert, int $slot, int $count): array
+    {
+        $redis = $this->connectToNode($port, $tls, $caCert);
+
+        try {
+            $response = $redis->rawCommand('CLUSTER', 'GETKEYSINSLOT', (string) $slot, (string) $count);
+        } finally {
+            $redis->close();
+        }
+
+        if (!is_array($response)) {
+            throw new RuntimeException(sprintf(
+                'CLUSTER GETKEYSINSLOT %d returned an unexpected response on port %d.',
+                $slot,
+                $port,
+            ));
+        }
+
+        $keys = [];
+        foreach ($response as $key) {
+            if (is_string($key)) {
+                $keys[] = $key;
+            }
+        }
+
+        return $keys;
+    }
+
+    /**
+     * @param list<string> $keys
+     */
+    public function migrateKeys(
+        int $port,
+        bool $tls,
+        ?string $caCert,
+        string $destinationHost,
+        int $destinationPort,
+        array $keys,
+        int $timeoutMs,
+    ): void {
+        if ($keys === []) {
+            return;
+        }
+
+        $redis = $this->connectToNode($port, $tls, $caCert);
+
+        try {
+            $response = $redis->rawCommand(
+                'MIGRATE',
+                $destinationHost,
+                (string) $destinationPort,
+                '',
+                '0',
+                (string) $timeoutMs,
+                'REPLACE',
+                'KEYS',
+                ...$keys,
+            );
+        } finally {
+            $redis->close();
+        }
+
+        if ($response === true) {
+            return;
+        }
+
+        // NOKEY means the keys vanished between GETKEYSINSLOT and MIGRATE, which
+        // is not a failure for our purposes.
+        if (is_string($response) && in_array(strtoupper($response), ['OK', 'NOKEY'], true)) {
+            return;
+        }
+
+        throw new RuntimeException(sprintf(
+            'MIGRATE of %d key%s from port %d to %s:%d failed.',
+            count($keys),
+            count($keys) === 1 ? '' : 's',
+            $port,
+            $destinationHost,
+            $destinationPort,
+        ));
+    }
+
+    private function clusterSetSlot(int $port, bool $tls, ?string $caCert, int $slot, string $subcommand, ?string $nodeId): void
+    {
+        $redis = $this->connectToNode($port, $tls, $caCert);
+
+        try {
+            $response = $nodeId === null
+                ? $redis->rawCommand('CLUSTER', 'SETSLOT', (string) $slot, $subcommand)
+                : $redis->rawCommand('CLUSTER', 'SETSLOT', (string) $slot, $subcommand, $nodeId);
+        } finally {
+            $redis->close();
+        }
+
+        $this->assertOkResponse($response, sprintf('CLUSTER SETSLOT %d %s', $slot, $subcommand), $port);
+    }
+
     public function waitForKnownClusterNode(
         int $port,
         bool $tls,

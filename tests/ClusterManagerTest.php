@@ -7,6 +7,7 @@ namespace Mgrunder\CreateCluster\Tests;
 use Mgrunder\CreateCluster\ClusterManager;
 use Mgrunder\CreateCluster\ClusterNodeStatus;
 use Mgrunder\CreateCluster\ClusterShardStatus;
+use Mgrunder\CreateCluster\SlotRange;
 use Mgrunder\CreateCluster\PortRangeFormatter;
 use Mgrunder\CreateCluster\ReplicaTarget;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -217,8 +218,7 @@ MESSAGE);
         ];
         $shards = [
             new ClusterShardStatus(
-                slotStart: 0,
-                slotEnd: 16383,
+                slots: [new SlotRange(0, 16383)],
                 master: $this->node(7000, 'master', 'online', 1_000),
                 replicas: [
                     $this->node(7005, 'replica', 'online', 250),
@@ -373,8 +373,7 @@ MESSAGE);
     {
         return [
             new ClusterShardStatus(
-                slotStart: 0,
-                slotEnd: 8191,
+                slots: [new SlotRange(0, 8191)],
                 master: $this->node(7000, 'master', 'online'),
                 replicas: [
                     $this->node(7002, 'replica', 'fail'),
@@ -382,8 +381,7 @@ MESSAGE);
                 ],
             ),
             new ClusterShardStatus(
-                slotStart: 8192,
-                slotEnd: 16383,
+                slots: [new SlotRange(8192, 16383)],
                 master: $this->node(7001, 'master', 'online'),
                 replicas: [
                     $this->node(7004, 'replica', 'online'),

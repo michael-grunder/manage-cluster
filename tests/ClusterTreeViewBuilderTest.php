@@ -6,6 +6,7 @@ namespace Mgrunder\CreateCluster\Tests;
 
 use Mgrunder\CreateCluster\ClusterNodeStatus;
 use Mgrunder\CreateCluster\ClusterShardStatus;
+use Mgrunder\CreateCluster\SlotRange;
 use Mgrunder\CreateCluster\ClusterTreeViewBuilder;
 use Mgrunder\CreateCluster\ClusterTreeViewMode;
 use PHPUnit\Framework\TestCase;
@@ -64,8 +65,7 @@ final class ClusterTreeViewBuilderTest extends TestCase
     {
         return [
             new ClusterShardStatus(
-                slotStart: 0,
-                slotEnd: 5460,
+                slots: [new SlotRange(0, 5460)],
                 master: new ClusterNodeStatus('master-7000', '127.0.0.1', 7000, '', 'master', 100, 'online'),
                 replicas: [
                     new ClusterNodeStatus('replica-7001', '127.0.0.1', 7001, '', 'replica', 99, 'online'),
@@ -73,8 +73,7 @@ final class ClusterTreeViewBuilderTest extends TestCase
                 ],
             ),
             new ClusterShardStatus(
-                slotStart: 5461,
-                slotEnd: 10922,
+                slots: [new SlotRange(5461, 10922)],
                 master: new ClusterNodeStatus('master-7002', '127.0.0.1', 7002, '', 'master', 110, 'online'),
                 replicas: [],
             ),

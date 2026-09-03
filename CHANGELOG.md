@@ -13,8 +13,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a relative path such as `bin/manage-cluster` or `./manage-cluster.phar`, and
   any other command prints the path as given, so printed examples stay
   copy-pasteable.
+- `chaos --allow-slot-migration` now adds `slot-migration` to the allowed event
+  categories instead of being an accepted no-op.
+- `chaos` no longer refuses to start when `--categories` names only
+  `slot-migration`.
+- `status` now prints every slot range a primary owns as a comma-separated list
+  and sizes the slot column to fit, so ownership fragmented by slot migration
+  stays readable and aligned. A primary that owns no slots is still listed,
+  with `[-]` in the slot column, instead of disappearing from the topology.
 
 ### Added
+- Added working `chaos --categories slot-migration`, which moves a bounded batch
+  of slots between primaries with `CLUSTER SETSLOT` and `MIGRATE` and waits until
+  the destination owns every migrated slot with no open migration state.
+- Added `chaos --slot-strategy balanced|random`. `balanced` (the default) is
+  weighted so primaries owning more slots give them up and primaries owning
+  fewer receive them, never drains its source, and never moves slots toward the
+  heavier primary, keeping the cluster roughly even over a long run. `random`
+  ignores the distribution and hands a randomly sized, randomly positioned
+  window of one primary's slots to another, deliberately producing fragmented
+  and lopsided topologies.
+- Added `chaos --slot-batch N` to bound how many slots a single slot-migration
+  event moves (default: 16).
+- Added `chaos --seed N` coverage for slot planning, so a seeded run reproduces
+  both event selection and the slots each migration moves.
 - Added an interactive `php-tui` overview for `status --watch` without a seed
   port, allowing Up/Down selection of a running managed cluster and Enter to
   open that cluster's `status PORT --watch` view.

@@ -7,7 +7,7 @@ namespace Mgrunder\CreateCluster;
 final readonly class ChaosPrimaryState
 {
     /**
-     * @param list<string> $slotRanges
+     * @param list<SlotRange> $slotRanges
      * @param list<int> $replicaPorts
      */
     public function __construct(
@@ -25,6 +25,16 @@ final readonly class ChaosPrimaryState
     public function ownsSlots(): bool
     {
         return $this->slotRanges !== [];
+    }
+
+    public function ownsSlot(int $slot): bool
+    {
+        return SlotRange::containsSlot($this->slotRanges, $slot);
+    }
+
+    public function slotCount(): int
+    {
+        return SlotRange::countSlots($this->slotRanges);
     }
 
     public function isDegraded(): bool

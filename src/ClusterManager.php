@@ -28,6 +28,8 @@ final class ClusterManager
         private readonly ManagedClusterSummaryRenderer $managedClusterSummaryRenderer,
         private readonly ManagedClusterSummaryTuiRenderer $managedClusterSummaryTuiRenderer,
         private readonly ClusterTreeSelector $clusterTreeSelector,
+        private readonly SlotMigrationPlanner $slotMigrationPlanner,
+        private readonly SlotMigrator $slotMigrator,
         private readonly ConsoleOutput $output,
     ) {
     }
@@ -491,8 +493,7 @@ final class ClusterManager
 
         return array_map(
             static fn (ClusterShardStatus $shard): ClusterShardStatus => new ClusterShardStatus(
-                slotStart: $shard->slotStart,
-                slotEnd: $shard->slotEnd,
+                slots: $shard->slots,
                 master: $shard->master->withUsedMemoryBytes($usedMemoryByPort[$shard->master->port] ?? null),
                 replicas: array_map(
                     static fn (ClusterNodeStatus $replica): ClusterNodeStatus => $replica->withUsedMemoryBytes(
@@ -1311,10 +1312,11 @@ final class ClusterManager
             ChaosOptions::CATEGORY_REPLICA_KILL,
             ChaosOptions::CATEGORY_REPLICA_RESTART,
             ChaosOptions::CATEGORY_REPLICA_ADD,
+            ChaosOptions::CATEGORY_SLOT_MIGRATION,
         ];
 
         if (array_intersect($chaos->categories, $implementedCategories) === []) {
-            throw new RuntimeException('chaos v1 currently implements replica-kill, replica-restart, and replica-add.');
+            throw new RuntimeException('chaos v1 currently implements replica-kill, replica-restart, replica-add, and slot-migration.');
         }
 
         if ($chaos->seed !== null) {
@@ -1384,6 +1386,7 @@ final class ClusterManager
                 summary: $candidate->summary,
                 postcondition: $candidate->postcondition,
                 reasons: $candidate->reasons,
+                slotMigrationPlan: $candidate->slotMigrationPlan,
             );
             $runtime->inflightEvent = $event;
             $this->emitChaosWatchLine($chaos, sprintf('[chaos] event#%d %s', $event->id, $event->summary));
@@ -1481,9 +1484,7 @@ final class ClusterManager
             $this->redisNodeClient->waitForReady($selectedReplicaPort, $tls, $caCert);
             $this->output->success(sprintf('Redis node %d is ready', $selectedReplicaPort));
 
-            $meetHost = $primaryNode->endpoint !== ''
-                ? $primaryNode->endpoint
-                : ($primaryNode->ip !== '' ? $primaryNode->ip : '127.0.0.1');
+            $meetHost = $this->resolveNodeHost($primaryNode);
 
             $this->output->step(sprintf('Sending CLUSTER MEET to %s:%d', $meetHost, $primaryNode->port));
             $this->redisNodeClient->clusterMeet($selectedReplicaPort, $tls, $caCert, $meetHost, $primaryNode->port);
@@ -1503,6 +1504,15 @@ final class ClusterManager
         $this->persistClusterMetadataPortAddition($metadata, $selectedReplicaPort);
 
         return $selectedReplicaPort;
+    }
+
+    private function resolveNodeHost(ClusterNodeStatus $node): string
+    {
+        if ($node->endpoint !== '') {
+            return $node->endpoint;
+        }
+
+        return $node->ip !== '' ? $node->ip : '127.0.0.1';
     }
 
     /**
@@ -1620,7 +1630,6 @@ final class ClusterManager
 
         foreach ($shards as $shard) {
             $currentPrimaryPorts[$shard->master->port] = true;
-            $slotRange = $shard->slotRange();
 
             $masterInfo = $this->tryFetchNodeInfo($shard->master->port, $tls, $caCert);
             $nodeStateByPort[$shard->master->port] = $this->buildChaosNodeState(
@@ -1631,7 +1640,7 @@ final class ClusterManager
                 knownByCluster: true,
                 reachable: $masterInfo !== null || $this->systemInspector->isPortListening($shard->master->port),
                 health: $shard->master->health,
-                slotRanges: [$slotRange],
+                slotRanges: $shard->slots,
                 managed: in_array($shard->master->port, $managedPorts, true),
                 info: $masterInfo,
                 clusterDir: is_string($metadata['cluster_dir'] ?? null) ? $metadata['cluster_dir'] : null,
@@ -1713,7 +1722,7 @@ final class ClusterManager
                 port: $shard->master->port,
                 nodeId: $shard->master->id,
                 reachable: $masterState->reachable && !$masterState->isFailed,
-                slotRanges: [$shard->slotRange()],
+                slotRanges: $shard->slots,
                 replicaPorts: $replicaPorts,
                 healthyReplicaCount: $healthyReplicaCount,
                 syncingReplicaCount: $syncingReplicaCount,
@@ -1884,6 +1893,13 @@ final class ClusterManager
             }
         }
 
+        if (in_array(ChaosOptions::CATEGORY_SLOT_MIGRATION, $chaos->categories, true)) {
+            $slotMigration = $this->buildSlotMigrationCandidate($view, $chaos);
+            if ($slotMigration instanceof ChaosCandidateEvent) {
+                $candidates[] = $slotMigration;
+            }
+        }
+
         if ($candidates === []) {
             return null;
         }
@@ -1896,6 +1912,94 @@ final class ClusterManager
         ));
 
         return $topCandidates[mt_rand(0, count($topCandidates) - 1)];
+    }
+
+    /**
+     * Slot migration is the one category that rewrites ownership rather than
+     * membership, so it only runs on an otherwise settled cluster unless the
+     * operator opted into --unsafe.
+     */
+    private function buildSlotMigrationCandidate(ChaosClusterView $view, ChaosOptions $chaos): ?ChaosCandidateEvent
+    {
+        if ($view->clusterDown) {
+            return null;
+        }
+
+        $reasons = [sprintf(
+            'slot-migration strategy %s is %s',
+            $chaos->slotMigrationStrategy->value,
+            $chaos->slotMigrationStrategy->description(),
+        )];
+
+        if ($chaos->unsafe) {
+            $reasons[] = '--unsafe skips the fully-settled cluster precondition';
+        } else {
+            if ($view->degradedPrimaryPorts !== []) {
+                return null;
+            }
+
+            foreach ($view->nodeStateByPort as $node) {
+                if (!$node->knownByCluster) {
+                    continue;
+                }
+
+                if (!$node->reachable || $node->isFailed || $node->isSyncing || $node->isLoading) {
+                    return null;
+                }
+            }
+
+            $reasons[] = 'every cluster node is reachable, healthy, and not syncing';
+        }
+
+        $assignments = [];
+        foreach ($view->primaryStateByPort as $primary) {
+            if (!$primary->reachable) {
+                continue;
+            }
+
+            $assignments[] = new PrimarySlotAssignment(
+                port: $primary->port,
+                nodeId: $primary->nodeId,
+                ranges: $primary->slotRanges,
+            );
+        }
+
+        if (count($assignments) < 2) {
+            return null;
+        }
+
+        $plan = $this->slotMigrationPlanner->plan(
+            $assignments,
+            $chaos->slotMigrationStrategy,
+            $chaos->slotMigrationBatch,
+        );
+
+        if (!$plan instanceof SlotMigrationPlan) {
+            return null;
+        }
+
+        $slotCounts = array_map(
+            static fn (PrimarySlotAssignment $assignment): int => $assignment->slotCount(),
+            $assignments,
+        );
+        $spread = max($slotCounts) - min($slotCounts);
+
+        $score = 2;
+        if ($chaos->slotMigrationStrategy === SlotMigrationStrategy::Balanced && $spread > $chaos->slotMigrationBatch) {
+            $score += 2;
+            $reasons[] = sprintf('slot ownership is uneven by %d slots across primaries', $spread);
+        }
+
+        return new ChaosCandidateEvent(
+            category: ChaosOptions::CATEGORY_SLOT_MIGRATION,
+            targetPort: $plan->destinationPort,
+            targetPrimaryPort: $plan->sourcePort,
+            score: $score,
+            summary: $plan->summary(),
+            postcondition: $plan->postcondition(),
+            reasons: $reasons,
+            slotMigrationPlan: $plan,
+        );
     }
 
     /**
@@ -1955,6 +2059,38 @@ final class ClusterManager
                     replicaPort: $event->targetPort,
                 );
                 $runtime->rememberReplicaPrimary($event->targetPort, $event->targetPrimaryPort);
+                break;
+
+            case ChaosOptions::CATEGORY_SLOT_MIGRATION:
+                $plan = $event->slotMigrationPlan;
+                if (!$plan instanceof SlotMigrationPlan) {
+                    throw new RuntimeException('slot-migration is missing a migration plan.');
+                }
+
+                $rawShards = $this->readClusterShardsWithFallback($view->seedPort, $tls, $caCert);
+                $shards = $this->clusterShardsParser->parse($rawShards);
+                $destinationNode = $this->findPrimaryNodeByPort($shards, $plan->destinationPort);
+                if (!$destinationNode instanceof ClusterNodeStatus) {
+                    throw new RuntimeException(sprintf(
+                        'Unable to resolve destination primary %d for slot-migration.',
+                        $plan->destinationPort,
+                    ));
+                }
+
+                $notifyPorts = [];
+                foreach ($view->primaryStateByPort as $primaryPort => $primary) {
+                    if ($primary->reachable) {
+                        $notifyPorts[] = $primaryPort;
+                    }
+                }
+
+                $this->slotMigrator->migrate(
+                    plan: $plan,
+                    destinationHost: $this->resolveNodeHost($destinationNode),
+                    notifyPorts: $notifyPorts,
+                    tls: $tls,
+                    caCert: $caCert,
+                );
                 break;
 
             default:
@@ -2020,8 +2156,35 @@ final class ClusterManager
             ChaosOptions::CATEGORY_REPLICA_KILL => $this->isReplicaKillSatisfied($event, $view),
             ChaosOptions::CATEGORY_REPLICA_RESTART => $this->isReplicaRestartSatisfied($event, $view),
             ChaosOptions::CATEGORY_REPLICA_ADD => $this->isReplicaAddSatisfied($event, $view),
+            ChaosOptions::CATEGORY_SLOT_MIGRATION => $this->isSlotMigrationSatisfied($event, $view),
             default => false,
         };
+    }
+
+    private function isSlotMigrationSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
+    {
+        $plan = $event->slotMigrationPlan;
+        if (!$plan instanceof SlotMigrationPlan || $view->clusterDown) {
+            return false;
+        }
+
+        $source = $view->primaryStateByPort[$plan->sourcePort] ?? null;
+        $destination = $view->primaryStateByPort[$plan->destinationPort] ?? null;
+        if (!$source instanceof ChaosPrimaryState || !$destination instanceof ChaosPrimaryState) {
+            return false;
+        }
+
+        if (!$source->reachable || !$destination->reachable) {
+            return false;
+        }
+
+        foreach ($plan->slots() as $slot) {
+            if (!$destination->ownsSlot($slot) || $source->ownsSlot($slot)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function isReplicaKillSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
@@ -2070,6 +2233,11 @@ final class ClusterManager
 
     private function formatChaosWaitLine(ChaosEventRecord $event, ChaosClusterView $view): string
     {
+        $plan = $event->slotMigrationPlan;
+        if ($event->category === ChaosOptions::CATEGORY_SLOT_MIGRATION && $plan instanceof SlotMigrationPlan) {
+            return $this->formatSlotMigrationWaitLine($event->id, $plan, $view);
+        }
+
         $target = $event->targetPort !== null ? ($view->nodeStateByPort[$event->targetPort] ?? null) : null;
         $primary = $event->targetPrimaryPort !== null ? ($view->primaryStateByPort[$event->targetPrimaryPort] ?? null) : null;
         $targetReachable = $target instanceof ChaosNodeState ? ($target->reachable ? '1' : '0') : '0';
@@ -2085,6 +2253,29 @@ final class ClusterManager
             $event->targetPrimaryPort !== null ? (string) $event->targetPrimaryPort : '-',
             $primaryHealthy,
             $view->degradedPrimaryPorts === [] ? '-' : implode(',', array_map('strval', $view->degradedPrimaryPorts)),
+        );
+    }
+
+    private function formatSlotMigrationWaitLine(int $eventId, SlotMigrationPlan $plan, ChaosClusterView $view): string
+    {
+        $destination = $view->primaryStateByPort[$plan->destinationPort] ?? null;
+        $slots = $plan->slots();
+        $owned = 0;
+        foreach ($slots as $slot) {
+            if ($destination instanceof ChaosPrimaryState && $destination->ownsSlot($slot)) {
+                $owned++;
+            }
+        }
+
+        return sprintf(
+            '[wait ] event#%d slots=%s source=%d destination=%d owned=%d/%d cluster=%s',
+            $eventId,
+            $plan->describeRanges(),
+            $plan->sourcePort,
+            $plan->destinationPort,
+            $owned,
+            count($slots),
+            $view->clusterDown ? 'down' : 'ok',
         );
     }
 
@@ -2115,7 +2306,7 @@ final class ClusterManager
                 $node->reachable ? '1' : '0',
                 $node->isFailed ? '1' : '0',
                 $node->isSyncing ? '1' : '0',
-                implode(',', $node->slotRanges),
+                SlotRange::format($node->slotRanges),
             ]);
         }
 
@@ -2150,7 +2341,7 @@ final class ClusterManager
 
     /**
      * @param array<string, mixed>|null $info
-     * @param list<string> $slotRanges
+     * @param list<SlotRange> $slotRanges
      */
     private function buildChaosNodeState(
         int $port,
@@ -2897,7 +3088,7 @@ final class ClusterManager
     private function findPrimaryPortForSlot(int $slot, array $shards): ?int
     {
         foreach ($shards as $shard) {
-            if ($slot >= $shard->slotStart && $slot <= $shard->slotEnd) {
+            if ($shard->ownsSlot($slot)) {
                 return $shard->master->port;
             }
         }

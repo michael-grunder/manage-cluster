@@ -22,6 +22,7 @@ final readonly class ChaosEventRecord
         public string $postcondition,
         public array $notes = [],
         public array $reasons = [],
+        public ?SlotMigrationPlan $slotMigrationPlan = null,
     ) {
     }
 
@@ -42,6 +43,7 @@ final readonly class ChaosEventRecord
             postcondition: $this->postcondition,
             notes: $notes ?? $this->notes,
             reasons: $this->reasons,
+            slotMigrationPlan: $this->slotMigrationPlan,
         );
     }
 }

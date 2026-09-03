@@ -23,6 +23,8 @@ final readonly class ChaosOptions
         self::CATEGORY_SLOT_MIGRATION,
     ];
 
+    public const int DEFAULT_SLOT_MIGRATION_BATCH = 16;
+
     /**
      * @var list<string>
      */
@@ -47,6 +49,8 @@ final readonly class ChaosOptions
         public int $cooldownSeconds,
         public bool $allowSlotMigration,
         public bool $unsafe,
+        public SlotMigrationStrategy $slotMigrationStrategy = SlotMigrationStrategy::Balanced,
+        public int $slotMigrationBatch = self::DEFAULT_SLOT_MIGRATION_BATCH,
     ) {
     }
 }

@@ -23,8 +23,9 @@ cluster management.
 - Kill an interactively selected primary/replica or a specific replica port.
 - Interactively add a replica to a selected primary.
 - Restart an interactively selected failed replica or a specific failed replica port from saved node metadata.
-- Run serialized replica-chaos loops that kill, restart, and add replicas while
-  waiting for the cluster to converge between each step.
+- Run serialized chaos loops that kill, restart, and add replicas and migrate
+  slots between primaries, waiting for the cluster to converge between each
+  step.
 - Generate shell completion scripts for supported shells.
 - Start TLS-only local clusters with ephemeral certificates.
 - Generate a standalone startup shell script instead of starting immediately.
@@ -330,8 +331,8 @@ Behavior notes:
 
 ### `chaos`
 
-Runs a conservative, serialized chaos loop aimed at replica churn rather than a
-fully generic chaos monkey.
+Runs a conservative, serialized chaos loop aimed at replica and slot churn
+rather than a fully generic chaos monkey.
 
 ```bash
 bin/manage-cluster chaos 7000
@@ -339,6 +340,8 @@ bin/manage-cluster chaos 7000 --categories replica-kill,replica-restart
 bin/manage-cluster chaos 7000 --max-events 50
 bin/manage-cluster chaos 7000 --interval 8 --watch
 bin/manage-cluster chaos 7000 --dry-run
+bin/manage-cluster chaos 7000 --allow-slot-migration --slot-batch 32
+bin/manage-cluster chaos 7000 --categories slot-migration --slot-strategy random
 ```
 
 Useful options:
@@ -353,19 +356,53 @@ Useful options:
 - `--seed N` seeds the PRNG for reproducible event selection
 - `--wait-timeout SECONDS` bounds the post-event convergence wait
 - `--cooldown SECONDS` adds a quiet period after convergence
+- `--allow-slot-migration` adds `slot-migration` to the allowed categories
+  without having to restate the replica categories
+- `--slot-strategy NAME` picks `balanced` (default) or `random` slot selection
+- `--slot-batch N` bounds how many slots one migration event moves (default: 16)
 - `--unsafe` allows lower-redundancy actions that are otherwise skipped
 
 Behavior notes:
 
-- v1 actively executes `replica-kill`, `replica-restart`, and `replica-add`
-- `replica-remove` and `slot-migration` are parsed for forward compatibility but
-  remain disabled by the conservative v1 planner
+- v1 actively executes `replica-kill`, `replica-restart`, `replica-add`, and
+  `slot-migration`
+- `replica-remove` is parsed for forward compatibility but remains disabled by
+  the conservative v1 planner
 - The loop keeps in-memory runtime history so follow-up actions can repair or
   extend earlier replica churn instead of choosing stateless random actions
 - Only one mutation is in flight at a time, and each event must satisfy a
   topology-based postcondition before the next one can start
 - `--dry-run` with no `--max-events` prints a single planned step and exits
 - Requires saved managed-cluster metadata in the configured `--state-dir`
+
+#### Slot migration
+
+`slot-migration` is off by default. Enable it with `--allow-slot-migration`, or
+name it in `--categories`. Each event moves a bounded batch of slots from one
+primary to another using `CLUSTER SETSLOT` plus `MIGRATE`, then waits until the
+destination owns every migrated slot and no migration state is left open.
+
+Two strategies decide which slots move where:
+
+- `balanced` (default) weights the choice by current ownership, so primaries
+  holding more slots are likelier to give them up and primaries holding fewer
+  are likelier to receive them. Each move closes about half the gap between the
+  two, never drains its source, and never runs toward the heavier primary, so
+  repeated events keep the cluster roughly even and ownership stays contiguous.
+- `random` ignores the distribution entirely: a uniformly chosen primary hands a
+  randomly sized, randomly positioned window of its slots to another uniformly
+  chosen primary, and it may hand over every slot it owns. This deliberately
+  produces fragmented, lopsided topologies, which is the point when testing how
+  a client copes with them.
+
+Slot migration only runs on a settled cluster: no `CLUSTERDOWN`, no degraded
+primaries, and no failed, loading, or syncing nodes. `--unsafe` skips that
+precondition. `--seed N` makes both event selection and slot planning
+reproducible.
+
+Migrating slots fragments ownership, so `status` reports each primary's slot
+ranges as a comma-separated list, and a primary that has given away every slot
+is still listed with `[-]`.
 
 ### `help`
 

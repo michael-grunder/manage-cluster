@@ -6,6 +6,7 @@ namespace Mgrunder\CreateCluster\Tests;
 
 use Mgrunder\CreateCluster\ClusterNodeStatus;
 use Mgrunder\CreateCluster\ClusterShardStatus;
+use Mgrunder\CreateCluster\SlotRange;
 use Mgrunder\CreateCluster\ClusterStatusTuiRenderer;
 use Mgrunder\CreateCluster\NodeLatencySnapshot;
 use Mgrunder\CreateCluster\NodeLatencyState;
@@ -170,8 +171,7 @@ final class ClusterStatusTuiRendererTest extends TestCase
     {
         return [
             new ClusterShardStatus(
-                slotStart: 0,
-                slotEnd: 5460,
+                slots: [new SlotRange(0, 5460)],
                 master: new ClusterNodeStatus('master-7000', '127.0.0.1', 7000, '', 'master', 100, 'online', 1024),
                 replicas: [
                     new ClusterNodeStatus('replica-7005', '127.0.0.1', 7005, '', 'replica', 99, 'online', 1024),

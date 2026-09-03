@@ -27,7 +27,7 @@ final class CommandLineParser
         'fill' => 'Fill a cluster until its primaries reach a target size',
         'add-replica' => 'Add a new replica to a selected primary',
         'restart-replica' => 'Restart one or more failed replicas from cluster metadata',
-        'chaos' => 'Run serialized replica-focused cluster churn for client testing',
+        'chaos' => 'Run serialized replica and slot churn against a cluster for client testing',
         'completions' => 'Generate a shell completion script',
     ];
 
@@ -112,7 +112,9 @@ final class CommandLineParser
             ['--seed N', 'PRNG seed for reproducible event selection'],
             ['--wait-timeout SECONDS', 'Maximum wait for event convergence (default: 60)'],
             ['--cooldown SECONDS', 'Quiet period after convergence (default: 2)'],
-            ['--allow-slot-migration', 'Allow slot-migration selection when implemented'],
+            ['--allow-slot-migration', 'Add slot-migration to the allowed event categories'],
+            ['--slot-strategy NAME', 'Slot migration strategy: balanced (default) or random'],
+            ['--slot-batch N', 'Maximum slots moved per slot-migration event (default: 16)'],
             ['--unsafe', 'Permit lower-redundancy actions normally avoided'],
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
@@ -186,6 +188,8 @@ final class CommandLineParser
             'chaos 7000 --max-events 50',
             'chaos 7000 --interval 8 --watch',
             'chaos 7000 --dry-run',
+            'chaos 7000 --allow-slot-migration --slot-batch 32',
+            'chaos 7000 --categories slot-migration --slot-strategy random',
         ],
         'completions' => [
             'completions bash',
@@ -217,9 +221,11 @@ final class CommandLineParser
             '--all is scoped to failed replicas only; healthy replicas are left running.',
         ],
         'chaos' => [
-            'v1 focuses on serialized replica churn: kill, restart, and add.',
+            'v1 executes replica kill, restart, and add plus bounded slot migration.',
             'When --dry-run is used without --max-events, the command prints one planned event and exits.',
-            'slot-migration and replica-remove are parsed but remain disabled in conservative v1 selection.',
+            'slot-migration is opt-in through --categories or --allow-slot-migration.',
+            '--slot-strategy balanced keeps ownership even; random ignores the distribution and fragments it.',
+            'replica-remove is parsed but remains disabled in conservative v1 selection.',
         ],
     ];
 
@@ -280,6 +286,10 @@ final class CommandLineParser
         $chaosWaitTimeout = 60;
         $chaosCooldown = 2;
         $chaosAllowSlotMigration = false;
+        $chaosSlotStrategy = SlotMigrationStrategy::Balanced;
+        $chaosSlotStrategyProvided = false;
+        $chaosSlotBatch = ChaosOptions::DEFAULT_SLOT_MIGRATION_BATCH;
+        $chaosSlotBatchProvided = false;
         $chaosUnsafe = false;
         $typesProvided = false;
         $membersProvided = false;
@@ -412,6 +422,16 @@ final class CommandLineParser
 
                 case '--allow-slot-migration':
                     $chaosAllowSlotMigration = true;
+                    break;
+
+                case '--slot-strategy':
+                    $chaosSlotStrategy = SlotMigrationStrategy::parse($this->parseStringOption($argv, ++$i, '--slot-strategy'));
+                    $chaosSlotStrategyProvided = true;
+                    break;
+
+                case '--slot-batch':
+                    $chaosSlotBatch = $this->parseIntOption($argv, ++$i, '--slot-batch');
+                    $chaosSlotBatchProvided = true;
                     break;
 
                 case '--unsafe':
@@ -619,6 +639,14 @@ final class CommandLineParser
             throw new InvalidArgumentException('--allow-slot-migration can only be used with chaos.');
         }
 
+        if ($action !== 'chaos' && $chaosSlotStrategyProvided) {
+            throw new InvalidArgumentException('--slot-strategy can only be used with chaos.');
+        }
+
+        if ($action !== 'chaos' && $chaosSlotBatchProvided) {
+            throw new InvalidArgumentException('--slot-batch can only be used with chaos.');
+        }
+
         if ($action !== 'chaos' && $chaosUnsafe) {
             throw new InvalidArgumentException('--unsafe can only be used with chaos.');
         }
@@ -760,6 +788,14 @@ final class CommandLineParser
             throw new InvalidArgumentException('--cooldown must be >= 0.');
         }
 
+        if ($chaosSlotBatch < 1 || $chaosSlotBatch > SlotRange::TOTAL_SLOTS) {
+            throw new InvalidArgumentException(sprintf('--slot-batch must be between 1 and %d.', SlotRange::TOTAL_SLOTS));
+        }
+
+        if ($chaosAllowSlotMigration && !in_array(ChaosOptions::CATEGORY_SLOT_MIGRATION, $chaosCategories, true)) {
+            $chaosCategories = [...$chaosCategories, ChaosOptions::CATEGORY_SLOT_MIGRATION];
+        }
+
         $chaosOptions = null;
         if ($action === 'chaos') {
             $chaosOptions = new ChaosOptions(
@@ -774,6 +810,8 @@ final class CommandLineParser
                 cooldownSeconds: $chaosCooldown,
                 allowSlotMigration: $chaosAllowSlotMigration,
                 unsafe: $chaosUnsafe,
+                slotMigrationStrategy: $chaosSlotStrategy,
+                slotMigrationBatch: $chaosSlotBatch,
             );
         }
 

@@ -8,6 +8,7 @@ use InvalidArgumentException;
 use Mgrunder\CreateCluster\CommandLineParser;
 use Mgrunder\CreateCluster\InvocationName;
 use Mgrunder\CreateCluster\KillMethod;
+use Mgrunder\CreateCluster\SlotMigrationStrategy;
 use PHPUnit\Framework\TestCase;
 
 final class CommandLineParserTest extends TestCase
@@ -608,6 +609,8 @@ final class CommandLineParserTest extends TestCase
         self::assertSame(['replica-kill', 'replica-restart', 'replica-add'], $options->chaos->categories);
         self::assertSame(8, $options->chaos->intervalSeconds);
         self::assertFalse($options->chaos->dryRun);
+        self::assertSame(SlotMigrationStrategy::Balanced, $options->chaos->slotMigrationStrategy);
+        self::assertSame(16, $options->chaos->slotMigrationBatch);
     }
 
     public function testParsesChaosWithExplicitOptions(): void
@@ -634,6 +637,10 @@ final class CommandLineParserTest extends TestCase
             '90',
             '--cooldown',
             '4',
+            '--slot-strategy',
+            'random',
+            '--slot-batch',
+            '48',
             '--unsafe',
         ]);
 
@@ -647,6 +654,8 @@ final class CommandLineParserTest extends TestCase
         self::assertSame(123, $options->chaos->seed);
         self::assertSame(90, $options->chaos->waitTimeoutSeconds);
         self::assertSame(4, $options->chaos->cooldownSeconds);
+        self::assertSame(SlotMigrationStrategy::Random, $options->chaos->slotMigrationStrategy);
+        self::assertSame(48, $options->chaos->slotMigrationBatch);
         self::assertTrue($options->chaos->unsafe);
     }
 
@@ -882,5 +891,76 @@ final class CommandLineParserTest extends TestCase
         $this->expectExceptionMessage('Unsupported chaos category: bogus');
 
         $parser->parse(['bin/manage-cluster', 'chaos', '7000', '--categories', 'bogus']);
+    }
+
+    public function testAllowSlotMigrationAddsTheCategoryToTheDefaults(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'chaos', '7000', '--allow-slot-migration']);
+
+        self::assertNotNull($options->chaos);
+        self::assertTrue($options->chaos->allowSlotMigration);
+        self::assertSame(
+            ['replica-kill', 'replica-restart', 'replica-add', 'slot-migration'],
+            $options->chaos->categories,
+        );
+    }
+
+    public function testAllowSlotMigrationDoesNotDuplicateAnExplicitCategory(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse([
+            'bin/manage-cluster',
+            'chaos',
+            '7000',
+            '--categories',
+            'slot-migration',
+            '--allow-slot-migration',
+        ]);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame(['slot-migration'], $options->chaos->categories);
+    }
+
+    public function testChaosRejectsUnknownSlotStrategy(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unsupported slot migration strategy: sideways. Expected one of: balanced, random.');
+
+        $parser->parse(['bin/manage-cluster', 'chaos', '7000', '--slot-strategy', 'sideways']);
+    }
+
+    public function testChaosRejectsOutOfRangeSlotBatch(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--slot-batch must be between 1 and 16384.');
+
+        $parser->parse(['bin/manage-cluster', 'chaos', '7000', '--slot-batch', '0']);
+    }
+
+    public function testSlotStrategyOptionIsRejectedOutsideChaos(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--slot-strategy can only be used with chaos.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--slot-strategy', 'random']);
+    }
+
+    public function testSlotBatchOptionIsRejectedOutsideChaos(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--slot-batch can only be used with chaos.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--slot-batch', '8']);
     }
 }

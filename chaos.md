@@ -39,6 +39,8 @@ chosen based on:
 `bin/manage-cluster chaos 7000 --interval 8`
 `bin/manage-cluster chaos 7000 --dry-run`
 `bin/manage-cluster chaos 7000 --watch`
+`bin/manage-cluster chaos 7000 --allow-slot-migration --slot-batch 32`
+`bin/manage-cluster chaos 7000 --categories slot-migration --slot-strategy random`
 
 ### Options
 - `--categories LIST`
@@ -57,7 +59,8 @@ chosen based on:
   Notes:
   - `replica-remove` should exist in the design, but may be disabled by
     default in v1 if implementation is incomplete.
-  - `slot-migration` should exist in the design but remain conservative.
+  - `slot-migration` is implemented and conservative, but stays out of the
+    default set; enable it here or with `--allow-slot-migration`.
 
 - `--interval SECONDS`
   Minimum time between completed chaos steps.
@@ -91,8 +94,16 @@ chosen based on:
   Default: `2`
 
 - `--allow-slot-migration`
-  Explicit opt-in if `slot-migration` is implemented but not enabled by
-  default.
+  Explicit opt-in that adds `slot-migration` to the allowed categories, so the
+  replica categories do not have to be restated in `--categories`.
+
+- `--slot-strategy balanced|random`
+  How a slot-migration event chooses its source, destination, and slots.
+  Default: `balanced`
+
+- `--slot-batch N`
+  Maximum slots moved by a single slot-migration event.
+  Default: `16`
 
 - `--unsafe`
   Explicit opt-in for actions that may temporarily reduce redundancy
@@ -438,30 +449,68 @@ Exercise slot ownership changes in a controlled way without combining
 them with major replica churn.
 
 ### v1 status
-Supported in design, conservative in implementation.
+Implemented. Off by default; enabled with `--allow-slot-migration` or by
+naming `slot-migration` in `--categories`.
 
 ### Candidate eligibility
 Slot migration may be selected only if:
 - cluster is fully healthy
 - there are no degraded primaries
-- no nodes are failed
-- no replicas are currently syncing
+- no nodes are failed, loading, or syncing
 - no inflight mutation exists
-- user enabled category explicitly if guarded
+- at least two reachable primaries exist
+- user enabled the category explicitly
+
+`--unsafe` skips the fully-settled precondition.
+
+### Strategies
+
+Both strategies move at most `--slot-batch` slots per event and produce a
+single source, a single destination, and one set of slot ranges. Repetition
+across events is what produces the interesting topologies, not any one event.
+
+#### `balanced` (default)
+Keeps slot ownership roughly even over a long run.
+- the source is picked weighted by slot count, so heavier primaries are
+  likelier to give slots away
+- the destination is picked inversely weighted, so lighter primaries are
+  likelier to receive them
+- the move is then oriented heavier-to-lighter, so a balanced event never
+  pushes slots onto the primary that already owns more
+- the move size is about half the gap between the two, capped by
+  `--slot-batch`, and never drains the source
+- slots are taken from one end of the source's ownership, keeping ranges as
+  contiguous as the surrounding topology allows
+
+#### `random`
+Ignores the distribution entirely, which is the point: it is meant to produce
+pathological topologies that clients rarely see in a healthy cluster.
+- source and destination are both chosen uniformly
+- the move size is uniform in `1..--slot-batch`
+- the slots are a randomly positioned window inside the source's ownership,
+  which splits contiguous ranges apart
+- the source may hand over every slot it owns
 
 ### Execution
-- move a small number of slots from one primary to another
-- prefer a bounded, incremental rebalance rather than full rebalance
+Per slot, using the standard handshake:
+- `CLUSTER SETSLOT <slot> IMPORTING <source>` on the destination
+- `CLUSTER SETSLOT <slot> MIGRATING <destination>` on the source
+- drain the slot with `CLUSTER GETKEYSINSLOT` plus `MIGRATE ... REPLACE KEYS`
+- `CLUSTER SETSLOT <slot> NODE <destination>` on the destination, the source,
+  and every other reachable primary
+
+A failure clears the importing/migrating state on both nodes before the event
+is recorded as failed.
 
 ### Postcondition
 Wait for:
-- migrated slots stably owned by destination primary
-- no open migrating/importing states remain
+- every migrated slot stably owned by the destination primary
+- the source no longer owning any migrated slot
 - cluster remains healthy
 
 ### Notes
-For v1, slot migration should be rare and small.
-Replica mutation remains the priority.
+Slot migration stays bounded and is scored so replica mutation remains the
+more frequent event in a mixed run.
 
 ---
 
@@ -632,8 +681,8 @@ This is the most valuable next step for PhpRedis read-distribution
 testing because it exercises topology growth and synchronization.
 
 ### Phase 4
-Optionally implement:
-- conservative `slot-migration`
+Implement:
+- conservative `slot-migration` (done, with `balanced` and `random` strategies)
 - optional `replica-remove`
 
 ---

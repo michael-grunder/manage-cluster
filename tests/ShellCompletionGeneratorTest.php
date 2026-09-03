@@ -18,6 +18,8 @@ final class ShellCompletionGeneratorTest extends TestCase
         self::assertStringContainsString('--primaries', $script);
         self::assertStringContainsString('--replica', $script);
         self::assertStringContainsString('bash zsh', $script);
+        self::assertStringContainsString('--slot-strategy)', $script);
+        self::assertStringContainsString('compgen -W "balanced random"', $script);
     }
 
     public function testGeneratesZshCompletionScript(): void
@@ -29,6 +31,7 @@ final class ShellCompletionGeneratorTest extends TestCase
         self::assertStringContainsString("'--primaries'", $script);
         self::assertStringContainsString("'bash'", $script);
         self::assertStringContainsString("'zsh'", $script);
+        self::assertStringContainsString("'--slot-strategy'", $script);
         self::assertStringContainsString('compdef _manage_cluster manage-cluster', $script);
         self::assertStringNotContainsString('_manage_cluster "$@"', $script);
     }

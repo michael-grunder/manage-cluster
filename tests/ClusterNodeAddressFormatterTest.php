@@ -7,6 +7,7 @@ namespace Mgrunder\CreateCluster\Tests;
 use Mgrunder\CreateCluster\ClusterNodeAddressFormatter;
 use Mgrunder\CreateCluster\ClusterNodeStatus;
 use Mgrunder\CreateCluster\ClusterShardStatus;
+use Mgrunder\CreateCluster\SlotRange;
 use PHPUnit\Framework\TestCase;
 
 final class ClusterNodeAddressFormatterTest extends TestCase
@@ -15,8 +16,7 @@ final class ClusterNodeAddressFormatterTest extends TestCase
     {
         $shards = [
             new ClusterShardStatus(
-                slotStart: 0,
-                slotEnd: 100,
+                slots: [new SlotRange(0, 100)],
                 master: new ClusterNodeStatus('master', '127.0.0.1', 7000, '', 'master', 100, 'online'),
                 replicas: [
                     new ClusterNodeStatus('replica', '::1', 7001, '', 'replica', 99, 'online'),
@@ -32,8 +32,7 @@ final class ClusterNodeAddressFormatterTest extends TestCase
     {
         $shards = [
             new ClusterShardStatus(
-                slotStart: 0,
-                slotEnd: 100,
+                slots: [new SlotRange(0, 100)],
                 master: new ClusterNodeStatus('master', '127.0.0.1', 7000, '', 'master', 100, 'online'),
                 replicas: [
                     new ClusterNodeStatus('replica', '10.0.0.8', 7001, '', 'replica', 99, 'online'),

@@ -111,4 +111,79 @@ final class ClusterShardsParserTest extends TestCase
         self::assertSame('101-200', $shards[0]->slotRange());
         self::assertSame('127.0.0.1:7001', $shards[0]->master->address());
     }
+
+    public function testParsesEverySlotRangeReportedForAShard(): void
+    {
+        $parser = new ClusterShardsParser();
+
+        $reply = [
+            [
+                'slots', [0, 5460, 10923, 11000],
+                'nodes', [
+                    [
+                        'id', 'af8898a87e8d8200a32e6c2fa8b28951859f65d5',
+                        'port', 7000,
+                        'ip', '127.0.0.1',
+                        'endpoint', '127.0.0.1',
+                        'role', 'master',
+                        'replication-offset', 449,
+                        'health', 'online',
+                    ],
+                ],
+            ],
+        ];
+
+        $shards = $parser->parse($reply);
+
+        self::assertCount(1, $shards);
+        self::assertSame('0-5460,10923-11000', $shards[0]->slotRange());
+        self::assertSame(5539, $shards[0]->slotCount());
+        self::assertTrue($shards[0]->ownsSlot(10_923));
+        self::assertFalse($shards[0]->ownsSlot(5_461));
+    }
+
+    public function testKeepsPrimariesThatNoLongerOwnSlotsAndSortsThemLast(): void
+    {
+        $parser = new ClusterShardsParser();
+
+        $reply = [
+            [
+                'slots', [],
+                'nodes', [
+                    [
+                        'id', 'def959b870585e8f8d67dc4647fee9317a35aca2',
+                        'port', 7001,
+                        'ip', '127.0.0.1',
+                        'endpoint', '127.0.0.1',
+                        'role', 'master',
+                        'replication-offset', 448,
+                        'health', 'online',
+                    ],
+                ],
+            ],
+            [
+                'slots', [0, 16383],
+                'nodes', [
+                    [
+                        'id', 'af8898a87e8d8200a32e6c2fa8b28951859f65d5',
+                        'port', 7000,
+                        'ip', '127.0.0.1',
+                        'endpoint', '127.0.0.1',
+                        'role', 'master',
+                        'replication-offset', 449,
+                        'health', 'online',
+                    ],
+                ],
+            ],
+        ];
+
+        $shards = $parser->parse($reply);
+
+        self::assertCount(2, $shards);
+        self::assertSame(7000, $shards[0]->master->port);
+        self::assertSame(7001, $shards[1]->master->port);
+        self::assertFalse($shards[1]->ownsSlots());
+        self::assertSame('-', $shards[1]->slotRange());
+        self::assertNull($shards[1]->firstSlot());
+    }
 }

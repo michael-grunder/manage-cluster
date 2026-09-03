@@ -26,7 +26,7 @@ final class ClusterShardsParser
             $slotsData = $shardMap['slots'] ?? null;
             $nodesData = $shardMap['nodes'] ?? null;
 
-            if (!is_array($slotsData) || count($slotsData) < 2 || !is_array($nodesData)) {
+            if (!is_array($slotsData) || !is_array($nodesData)) {
                 continue;
             }
 
@@ -57,26 +57,53 @@ final class ClusterShardsParser
                 continue;
             }
 
-            $slotStart = $this->readInt($slotsData[0] ?? null);
-            $slotEnd = $this->readInt($slotsData[1] ?? null);
-            if ($slotStart === null || $slotEnd === null) {
-                continue;
-            }
-
             $shards[] = new ClusterShardStatus(
-                slotStart: $slotStart,
-                slotEnd: $slotEnd,
+                slots: $this->parseSlotRanges($slotsData),
                 master: $master,
                 replicas: $replicas,
             );
         }
 
+        // Shards without slots sort last so an emptied primary stays visible
+        // instead of jumping to the front of the topology.
         usort(
             $shards,
-            static fn (ClusterShardStatus $left, ClusterShardStatus $right): int => $left->slotStart <=> $right->slotStart,
+            static fn (ClusterShardStatus $left, ClusterShardStatus $right): int
+                => ($left->firstSlot() ?? SlotRange::TOTAL_SLOTS) <=> ($right->firstSlot() ?? SlotRange::TOTAL_SLOTS),
         );
 
         return $shards;
+    }
+
+    /**
+     * CLUSTER SHARDS reports slots as a flat list of start/end pairs, so a
+     * primary that has taken slots from elsewhere reports several pairs.
+     *
+     * @param array<mixed> $slotsData
+     * @return list<SlotRange>
+     */
+    private function parseSlotRanges(array $slotsData): array
+    {
+        $values = array_values($slotsData);
+        $slots = [];
+
+        for ($index = 0; $index + 1 < count($values); $index += 2) {
+            $start = $this->readInt($values[$index]);
+            $end = $this->readInt($values[$index + 1]);
+            if ($start === null || $end === null || $end < $start) {
+                continue;
+            }
+
+            if ($start < SlotRange::FIRST_SLOT || $end > SlotRange::LAST_SLOT) {
+                continue;
+            }
+
+            foreach (range($start, $end) as $slot) {
+                $slots[] = $slot;
+            }
+        }
+
+        return SlotRange::compact($slots);
     }
 
     /**
