@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+### Changed
+- Help, usage, and error output now name the command as it was invoked instead
+  of always printing `bin/manage-cluster`. A PHAR or script resolved through
+  `PATH` prints `manage-cluster`, a command inside the current directory prints
+  a relative path such as `bin/manage-cluster` or `./manage-cluster.phar`, and
+  any other command prints the path as given, so printed examples stay
+  copy-pasteable.
+
 ### Added
 - Added an interactive `php-tui` overview for `status --watch` without a seed
   port, allowing Up/Down selection of a running managed cluster and Enter to

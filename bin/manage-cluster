@@ -12,6 +12,7 @@ use Mgrunder\CreateCluster\ClusterTreeSelector;
 use Mgrunder\CreateCluster\ClusterTreeViewBuilder;
 use Mgrunder\CreateCluster\ConsoleOutput;
 use Mgrunder\CreateCluster\CommandLineParser;
+use Mgrunder\CreateCluster\InvocationName;
 use Mgrunder\CreateCluster\ManagedClusterSummaryRenderer;
 use Mgrunder\CreateCluster\ManagedClusterSummaryTuiRenderer;
 use Mgrunder\CreateCluster\RedisNodeClient;
@@ -22,21 +23,22 @@ use Mgrunder\CreateCluster\TlsMaterialGenerator;
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
-$parser = new CommandLineParser();
+$invocation = InvocationName::fromArgv($argv);
+$parser = new CommandLineParser($invocation);
 $interactive = function_exists('stream_isatty') && stream_isatty(STDOUT);
 
 if (count($argv) === 1) {
-    fwrite(STDOUT, CommandLineParser::usage($interactive) . PHP_EOL);
+    fwrite(STDOUT, $parser->usage($interactive) . PHP_EOL);
     exit(0);
 }
 
 if (($argv[1] ?? null) === 'help') {
-    fwrite(STDOUT, CommandLineParser::contextualUsage(CommandLineParser::inferHelpAction($argv), $interactive) . PHP_EOL);
+    fwrite(STDOUT, $parser->contextualUsage(CommandLineParser::inferHelpAction($argv), $interactive) . PHP_EOL);
     exit(0);
 }
 
 if (in_array('--help', $argv, true) || in_array('-h', $argv, true)) {
-    fwrite(STDOUT, CommandLineParser::contextualUsage(CommandLineParser::inferHelpAction($argv), $interactive) . PHP_EOL);
+    fwrite(STDOUT, $parser->contextualUsage(CommandLineParser::inferHelpAction($argv), $interactive) . PHP_EOL);
     exit(0);
 }
 
@@ -45,18 +47,17 @@ try {
 } catch (InvalidArgumentException $e) {
     $action = CommandLineParser::inferRequestedAction($argv);
     fwrite(STDERR, $e->getMessage() . PHP_EOL . PHP_EOL);
-    fwrite(STDERR, CommandLineParser::contextualUsage($action, $interactive) . PHP_EOL);
+    fwrite(STDERR, $parser->contextualUsage($action, $interactive) . PHP_EOL);
     exit(1);
 }
 
-$commandName = basename($argv[0] ?? 'manage-cluster') ?: 'manage-cluster';
 if ($options->action === 'completions') {
     if ($options->completionShell === null) {
         fwrite(STDERR, 'Missing completion shell.' . PHP_EOL);
         exit(1);
     }
 
-    fwrite(STDOUT, (new ShellCompletionGenerator())->generate($options->completionShell, $commandName) . PHP_EOL);
+    fwrite(STDOUT, (new ShellCompletionGenerator())->generate($options->completionShell, $invocation->command) . PHP_EOL);
     exit(0);
 }
 

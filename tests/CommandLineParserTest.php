@@ -6,14 +6,20 @@ namespace Mgrunder\CreateCluster\Tests;
 
 use InvalidArgumentException;
 use Mgrunder\CreateCluster\CommandLineParser;
+use Mgrunder\CreateCluster\InvocationName;
 use Mgrunder\CreateCluster\KillMethod;
 use PHPUnit\Framework\TestCase;
 
 final class CommandLineParserTest extends TestCase
 {
+    private static function parserNamed(string $display = 'bin/manage-cluster'): CommandLineParser
+    {
+        return new CommandLineParser(new InvocationName($display, 'manage-cluster'));
+    }
+
     public function testUsageIncludesCommandsSection(): void
     {
-        $usage = CommandLineParser::usage();
+        $usage = self::parserNamed()->usage();
 
         self::assertStringContainsString('bin/manage-cluster [OPTIONS] <COMMAND> [ARGS]', $usage);
         self::assertStringContainsString('Commands:', $usage);
@@ -26,7 +32,7 @@ final class CommandLineParserTest extends TestCase
 
     public function testContextualUsageForStatusAllowsOptionalPort(): void
     {
-        $usage = CommandLineParser::contextualUsage('status');
+        $usage = self::parserNamed()->contextualUsage('status');
 
         self::assertStringContainsString('bin/manage-cluster status [PORT] [--watch]', $usage);
         self::assertStringContainsString('bin/manage-cluster status', $usage);
@@ -34,7 +40,7 @@ final class CommandLineParserTest extends TestCase
 
     public function testContextualUsageForFillIncludesExamples(): void
     {
-        $usage = CommandLineParser::contextualUsage('fill');
+        $usage = self::parserNamed()->contextualUsage('fill');
 
         self::assertStringContainsString('bin/manage-cluster fill [PORT] --size SIZE', $usage);
         self::assertStringContainsString('Options:', $usage);
@@ -45,7 +51,7 @@ final class CommandLineParserTest extends TestCase
 
     public function testContextualUsageForChaosIncludesExamples(): void
     {
-        $usage = CommandLineParser::contextualUsage('chaos');
+        $usage = self::parserNamed()->contextualUsage('chaos');
 
         self::assertStringContainsString('bin/manage-cluster chaos SEED_PORT', $usage);
         self::assertStringContainsString('--categories LIST', $usage);
@@ -54,11 +60,38 @@ final class CommandLineParserTest extends TestCase
 
     public function testContextualUsageForCompletionsIncludesExamples(): void
     {
-        $usage = CommandLineParser::contextualUsage('completions');
+        $usage = self::parserNamed()->contextualUsage('completions');
 
         self::assertStringContainsString('bin/manage-cluster completions bash|zsh', $usage);
         self::assertStringContainsString('bin/manage-cluster completions bash', $usage);
         self::assertStringContainsString('bin/manage-cluster completions zsh', $usage);
+    }
+
+    public function testUsageRendersTheInvokedCommandName(): void
+    {
+        $usage = self::parserNamed('manage-cluster')->usage();
+
+        self::assertStringContainsString('manage-cluster [OPTIONS] <COMMAND> [ARGS]', $usage);
+        self::assertStringContainsString('manage-cluster start 7000', $usage);
+        self::assertStringContainsString('Run `manage-cluster help <command>` for command-specific help.', $usage);
+        self::assertStringNotContainsString('bin/manage-cluster', $usage);
+    }
+
+    public function testContextualUsageRendersTheInvokedCommandName(): void
+    {
+        $usage = self::parserNamed('./manage-cluster.phar')->contextualUsage('fill');
+
+        self::assertStringContainsString('./manage-cluster.phar fill [PORT] --size SIZE', $usage);
+        self::assertStringContainsString('./manage-cluster.phar fill --size 1g', $usage);
+        self::assertStringNotContainsString('bin/manage-cluster', $usage);
+    }
+
+    public function testHelpOptionThrowsUsageForTheInvokedCommandName(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessageMatches('#^Usage:\n  manage-cluster \[OPTIONS\]#');
+
+        self::parserNamed('manage-cluster')->parse(['manage-cluster', '--help']);
     }
 
     public function testInferRequestedActionFindsPositionalAction(): void

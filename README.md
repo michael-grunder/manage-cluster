@@ -377,6 +377,18 @@ bin/manage-cluster help start
 bin/manage-cluster help fill
 ```
 
+Usage lines and examples are rendered with the command you actually ran, so the
+printed examples can be copied and pasted as-is:
+
+- `manage-cluster` when the command was resolved through `PATH`, including a
+  PHAR installed under that name
+- A path relative to the current directory, such as `bin/manage-cluster` or
+  `./manage-cluster.phar`, when the command lives inside it
+- The path as given otherwise
+
+Error output uses the same name, and `completions bash|zsh` registers
+completion for the name the CLI was invoked as.
+
 ### `completions`
 
 Generate a shell completion script:
@@ -466,6 +478,15 @@ Run the built archive directly:
 
 ```bash
 ./dist/manage-cluster.phar start 7000 --replicas 1
+```
+
+Copy the archive somewhere on `PATH` to run it as a bare command. Help text and
+generated completions follow that name:
+
+```bash
+cp dist/manage-cluster.phar ~/.local/bin/manage-cluster
+manage-cluster help start
+manage-cluster completions zsh
 ```
 
 ## Development

@@ -120,74 +120,76 @@ final class CommandLineParser
     ];
 
     /**
+     * Example invocations without the leading command name; see {@see renderExamples()}.
+     *
      * @var array<string, list<string>>
      */
     private const array COMMAND_EXAMPLES = [
         'start' => [
-            'bin/manage-cluster start 7000',
-            'bin/manage-cluster start 7000 --primaries 4',
-            'bin/manage-cluster start 7000 --replicas 1',
-            'bin/manage-cluster start 7000-7005 --tls',
-            'bin/manage-cluster start 7000 -- --enable-debug-command local',
-            'bin/manage-cluster start 7000 -- replica-serve-stale-data no',
+            'start 7000',
+            'start 7000 --primaries 4',
+            'start 7000 --replicas 1',
+            'start 7000-7005 --tls',
+            'start 7000 -- --enable-debug-command local',
+            'start 7000 -- replica-serve-stale-data no',
         ],
         'stop' => [
-            'bin/manage-cluster stop 7000',
-            'bin/manage-cluster stop 7000-7005',
-            'bin/manage-cluster stop {7000..7008}',
+            'stop 7000',
+            'stop 7000-7005',
+            'stop {7000..7008}',
         ],
         'kill' => [
-            'bin/manage-cluster kill 7000',
-            'bin/manage-cluster kill 7000 --replica 7002',
-            'bin/manage-cluster kill 7000 --replica 7002 --method sigsegv',
-            'bin/manage-cluster kill 7000 --primary 7000 --replica 7002',
-            'bin/manage-cluster kill 7000 --all --wait',
-            'bin/manage-cluster kill 7000 --primary 7000 --all --wait',
+            'kill 7000',
+            'kill 7000 --replica 7002',
+            'kill 7000 --replica 7002 --method sigsegv',
+            'kill 7000 --primary 7000 --replica 7002',
+            'kill 7000 --all --wait',
+            'kill 7000 --primary 7000 --all --wait',
         ],
         'rebalance' => [
-            'bin/manage-cluster rebalance 7000',
-            'bin/manage-cluster rebalance 7000-7005',
+            'rebalance 7000',
+            'rebalance 7000-7005',
         ],
         'status' => [
-            'bin/manage-cluster status',
-            'bin/manage-cluster status 7000',
-            'bin/manage-cluster status 7000 --watch',
+            'status',
+            'status 7000',
+            'status 7000 --watch',
         ],
         'list' => [
-            'bin/manage-cluster list',
+            'list',
         ],
         'flush' => [
-            'bin/manage-cluster flush 7000',
-            'bin/manage-cluster flush 7000-7005',
+            'flush 7000',
+            'flush 7000-7005',
         ],
         'fill' => [
-            'bin/manage-cluster fill --size 1g',
-            'bin/manage-cluster fill --size 2.5g --keys 20000',
-            'bin/manage-cluster fill 7000 --size 256m --types string,set --members 32 --member-size 2048',
-            'bin/manage-cluster fill 7000 --size 512m --pin-primary 7003',
+            'fill --size 1g',
+            'fill --size 2.5g --keys 20000',
+            'fill 7000 --size 256m --types string,set --members 32 --member-size 2048',
+            'fill 7000 --size 512m --pin-primary 7003',
         ],
         'add-replica' => [
-            'bin/manage-cluster add-replica 7000',
-            'bin/manage-cluster add-replica 7000 --port 7010',
+            'add-replica 7000',
+            'add-replica 7000 --port 7010',
         ],
         'restart-replica' => [
-            'bin/manage-cluster restart-replica 7000',
-            'bin/manage-cluster restart-replica 7000 --replica 7002',
-            'bin/manage-cluster restart-replica 7000 --primary 7000 --replica 7002',
-            'bin/manage-cluster restart-replica 7000 --all --wait',
-            'bin/manage-cluster restart-replica 7000 --primary 7000 --all --wait',
-            'bin/manage-cluster restart-replica 7000 --replica 7002 --config replica-serve-stale-data=no',
+            'restart-replica 7000',
+            'restart-replica 7000 --replica 7002',
+            'restart-replica 7000 --primary 7000 --replica 7002',
+            'restart-replica 7000 --all --wait',
+            'restart-replica 7000 --primary 7000 --all --wait',
+            'restart-replica 7000 --replica 7002 --config replica-serve-stale-data=no',
         ],
         'chaos' => [
-            'bin/manage-cluster chaos 7000',
-            'bin/manage-cluster chaos 7000 --categories replica-kill,replica-restart',
-            'bin/manage-cluster chaos 7000 --max-events 50',
-            'bin/manage-cluster chaos 7000 --interval 8 --watch',
-            'bin/manage-cluster chaos 7000 --dry-run',
+            'chaos 7000',
+            'chaos 7000 --categories replica-kill,replica-restart',
+            'chaos 7000 --max-events 50',
+            'chaos 7000 --interval 8 --watch',
+            'chaos 7000 --dry-run',
         ],
         'completions' => [
-            'bin/manage-cluster completions bash',
-            'bin/manage-cluster completions zsh',
+            'completions bash',
+            'completions zsh',
         ],
     ];
 
@@ -226,6 +228,11 @@ final class CommandLineParser
     private const int DEFAULT_FILL_TARGET_KEYS = 5000;
     private const int DEFAULT_FILL_TARGET_MEMBER_BYTES = 4096;
     private const int DEFAULT_FILL_MAX_MEMBERS = 256;
+
+    public function __construct(
+        private readonly InvocationName $invocation = new InvocationName(InvocationName::DEFAULT_COMMAND, InvocationName::DEFAULT_COMMAND),
+    ) {
+    }
 
     /**
      * @param list<string> $argv
@@ -291,7 +298,7 @@ final class CommandLineParser
 
                 case '--help':
                 case '-h':
-                    throw new InvalidArgumentException(self::usage());
+                    throw new InvalidArgumentException($this->usage());
 
                 case '--start':
                 case '--stop':
@@ -830,11 +837,16 @@ final class CommandLineParser
         return self::globalOptions();
     }
 
-    public static function usage(bool $interactive = false): string
+    public function invocation(): InvocationName
+    {
+        return $this->invocation;
+    }
+
+    public function usage(bool $interactive = false): string
     {
         $lines = [
             self::formatHeading('Usage', $interactive) . ':',
-            '  bin/manage-cluster [OPTIONS] <COMMAND> [ARGS]',
+            '  ' . $this->command('[OPTIONS] <COMMAND> [ARGS]'),
             '',
             self::formatHeading('Options', $interactive) . ':',
         ];
@@ -852,28 +864,30 @@ final class CommandLineParser
         $lines[] = self::formatAlignedRow('help', 'Print this message or the help of a given command', $interactive, 18);
         $lines[] = '';
         $lines[] = self::formatHeading('Examples', $interactive) . ':';
-        $lines[] = '  bin/manage-cluster start 7000';
-        $lines[] = '  bin/manage-cluster status';
-        $lines[] = '  bin/manage-cluster status 7000 --watch';
-        $lines[] = '  bin/manage-cluster list';
-        $lines[] = '  bin/manage-cluster fill --size 1g';
-        $lines[] = '  bin/manage-cluster completions zsh';
-        $lines[] = '  bin/manage-cluster help start';
+        $lines = [...$lines, ...$this->renderExamples([
+            'start 7000',
+            'status',
+            'status 7000 --watch',
+            'list',
+            'fill --size 1g',
+            'completions zsh',
+            'help start',
+        ])];
         $lines[] = '';
-        $lines[] = 'Run `bin/manage-cluster help <command>` for command-specific help.';
+        $lines[] = sprintf('Run `%s` for command-specific help.', $this->command('help <command>'));
 
         return implode(PHP_EOL, $lines);
     }
 
-    public static function contextualUsage(?string $action, bool $interactive = false): string
+    public function contextualUsage(?string $action, bool $interactive = false): string
     {
         if ($action === null || !isset(self::ACTION_SUMMARIES[$action])) {
-            return self::usage($interactive);
+            return $this->usage($interactive);
         }
 
         $lines = [
             self::formatHeading('Usage', $interactive) . ':',
-            '  ' . self::commandSynopsis($action),
+            '  ' . $this->command(self::commandSynopsis($action)),
             '',
             self::formatHeading('About', $interactive) . ':',
             '  ' . self::ACTION_SUMMARIES[$action],
@@ -888,9 +902,7 @@ final class CommandLineParser
         $lines[] = self::formatAlignedRow('-h, --help', 'Print help for this command', $interactive);
         $lines[] = '';
         $lines[] = self::formatHeading('Examples', $interactive) . ':';
-        foreach (self::COMMAND_EXAMPLES[$action] as $example) {
-            $lines[] = '  ' . $example;
-        }
+        $lines = [...$lines, ...$this->renderExamples(self::COMMAND_EXAMPLES[$action])];
 
         $notes = self::COMMAND_NOTES[$action] ?? [];
         if ($notes !== []) {
@@ -1192,22 +1204,41 @@ final class CommandLineParser
         ];
     }
 
+    /**
+     * @param list<string> $examples
+     * @return list<string>
+     */
+    private function renderExamples(array $examples): array
+    {
+        return array_map(fn (string $example): string => '  ' . $this->command($example), $examples);
+    }
+
+    private function command(string $arguments): string
+    {
+        return $arguments === ''
+            ? $this->invocation->display
+            : sprintf('%s %s', $this->invocation->display, $arguments);
+    }
+
+    /**
+     * Argument synopsis without the leading command name; see {@see command()}.
+     */
     private static function commandSynopsis(string $action): string
     {
         return match ($action) {
-            'start' => 'bin/manage-cluster start PORT [PORT ...] [--primaries N] [--replicas N] [--tls] [--gen-script PATH] [-- NAME VALUE ...]',
-            'stop' => 'bin/manage-cluster stop PORT [PORT ...]',
-            'kill' => 'bin/manage-cluster kill SEED_PORT [--replica PORT] [--primary PORT] [--all] [--wait] [--method METHOD]',
-            'rebalance' => 'bin/manage-cluster rebalance PORT [PORT ...]',
-            'status' => 'bin/manage-cluster status [PORT] [--watch]',
-            'list' => 'bin/manage-cluster list',
-            'flush' => 'bin/manage-cluster flush PORT [PORT ...]',
-            'fill' => 'bin/manage-cluster fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]',
-            'add-replica' => 'bin/manage-cluster add-replica SEED_PORT [--port PORT]',
-            'restart-replica' => 'bin/manage-cluster restart-replica SEED_PORT [--replica PORT] [--primary PORT] [--all] [--wait] [--config NAME=VALUE]',
-            'chaos' => 'bin/manage-cluster chaos SEED_PORT [--categories LIST] [--interval SECONDS] [--max-events N] [--dry-run] [--watch]',
-            'completions' => 'bin/manage-cluster completions bash|zsh',
-            default => 'bin/manage-cluster [OPTIONS] <COMMAND> [ARGS]',
+            'start' => 'start PORT [PORT ...] [--primaries N] [--replicas N] [--tls] [--gen-script PATH] [-- NAME VALUE ...]',
+            'stop' => 'stop PORT [PORT ...]',
+            'kill' => 'kill SEED_PORT [--replica PORT] [--primary PORT] [--all] [--wait] [--method METHOD]',
+            'rebalance' => 'rebalance PORT [PORT ...]',
+            'status' => 'status [PORT] [--watch]',
+            'list' => 'list',
+            'flush' => 'flush PORT [PORT ...]',
+            'fill' => 'fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]',
+            'add-replica' => 'add-replica SEED_PORT [--port PORT]',
+            'restart-replica' => 'restart-replica SEED_PORT [--replica PORT] [--primary PORT] [--all] [--wait] [--config NAME=VALUE]',
+            'chaos' => 'chaos SEED_PORT [--categories LIST] [--interval SECONDS] [--max-events N] [--dry-run] [--watch]',
+            'completions' => 'completions bash|zsh',
+            default => '[OPTIONS] <COMMAND> [ARGS]',
         };
     }
 
