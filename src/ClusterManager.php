@@ -28,6 +28,7 @@ final class ClusterManager
         private readonly ManagedClusterSummaryRenderer $managedClusterSummaryRenderer,
         private readonly ManagedClusterSummaryTuiRenderer $managedClusterSummaryTuiRenderer,
         private readonly ClusterTreeSelector $clusterTreeSelector,
+        private readonly SlotMigrationEligibility $slotMigrationEligibility,
         private readonly SlotMigrationPlanner $slotMigrationPlanner,
         private readonly SlotMigrator $slotMigrator,
         private readonly ConsoleOutput $output,
@@ -1358,19 +1359,7 @@ final class ClusterManager
 
             $candidate = $this->selectChaosCandidate($view, $runtime, $chaos);
             if (!$candidate instanceof ChaosCandidateEvent) {
-                $runtime->markFailure();
-                if ($runtime->consecutiveFailures >= $chaos->maxFailures) {
-                    throw new RuntimeException(sprintf(
-                        'Chaos failed to select a safe event %d times in a row; aborting.',
-                        $runtime->consecutiveFailures,
-                    ));
-                }
-
-                $this->emitChaosWatchLine($chaos, sprintf(
-                    '[wait ] no eligible events (failure %d/%d)',
-                    $runtime->consecutiveFailures,
-                    $chaos->maxFailures,
-                ));
+                $this->emitChaosWatchLine($chaos, $this->formatNoEligibleChaosEventsLine($view, $chaos));
                 sleep(1);
                 continue;
             }
@@ -1921,7 +1910,7 @@ final class ClusterManager
      */
     private function buildSlotMigrationCandidate(ChaosClusterView $view, ChaosOptions $chaos): ?ChaosCandidateEvent
     {
-        if ($view->clusterDown) {
+        if ($this->slotMigrationEligibility->blockers($view, $chaos->unsafe) !== []) {
             return null;
         }
 
@@ -1934,20 +1923,6 @@ final class ClusterManager
         if ($chaos->unsafe) {
             $reasons[] = '--unsafe skips the fully-settled cluster precondition';
         } else {
-            if ($view->degradedPrimaryPorts !== []) {
-                return null;
-            }
-
-            foreach ($view->nodeStateByPort as $node) {
-                if (!$node->knownByCluster) {
-                    continue;
-                }
-
-                if (!$node->reachable || $node->isFailed || $node->isSyncing || $node->isLoading) {
-                    return null;
-                }
-            }
-
             $reasons[] = 'every cluster node is reachable, healthy, and not syncing';
         }
 
@@ -2229,6 +2204,20 @@ final class ClusterManager
         }
 
         $this->output->info($message);
+    }
+
+    private function formatNoEligibleChaosEventsLine(ChaosClusterView $view, ChaosOptions $chaos): string
+    {
+        if (!in_array(ChaosOptions::CATEGORY_SLOT_MIGRATION, $chaos->categories, true)) {
+            return '[wait ] no eligible events';
+        }
+
+        $blockers = $this->slotMigrationEligibility->blockers($view, $chaos->unsafe);
+        if ($blockers === []) {
+            $blockers[] = 'no legal slot source and destination';
+        }
+
+        return sprintf('[wait ] slot-migration blocked: %s', implode('; ', $blockers));
     }
 
     private function formatChaosWaitLine(ChaosEventRecord $event, ChaosClusterView $view): string

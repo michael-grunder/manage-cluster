@@ -350,7 +350,7 @@ Useful options:
   `replica-restart`, `replica-remove`, `replica-add`, and `slot-migration`
 - `--interval SECONDS` sets the minimum time between completed steps
 - `--max-events N` stops after N completed events
-- `--max-failures N` aborts after N consecutive planning or execution failures
+- `--max-failures N` aborts after N consecutive execution or convergence failures
 - `--dry-run` prints the next planned event without mutating the cluster
 - `--watch` prints compact state and convergence progress
 - `--seed N` seeds the PRNG for reproducible event selection
@@ -397,8 +397,9 @@ Two strategies decide which slots move where:
 
 Slot migration only runs on a settled cluster: no `CLUSTERDOWN`, no degraded
 primaries, and no failed, loading, or syncing nodes. `--unsafe` skips that
-precondition. `--seed N` makes both event selection and slot planning
-reproducible.
+precondition. When the cluster is temporarily unsettled, chaos waits without
+consuming the failure budget; `--watch` identifies the blocking nodes and
+conditions. `--seed N` makes both event selection and slot planning reproducible.
 
 Migrating slots fragments ownership, so `status` reports each primary's slot
 ranges as a comma-separated list, and a primary that has given away every slot

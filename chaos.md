@@ -572,9 +572,13 @@ Abort the run if:
 - cluster enters persistent `CLUSTERDOWN`
 - topology cannot be parsed
 - managed metadata is inconsistent
-- consecutive event failures exceed threshold
+- consecutive event execution or convergence failures exceed threshold
 - wait timeout is reached for a required postcondition and the cluster is
   left in an unknown dangerous state
+
+Having no currently safe candidate is a wait state, not an event failure. The
+loop keeps polling without consuming the failure budget and `--watch` reports
+the conditions blocking slot migration.
 
 ---
 

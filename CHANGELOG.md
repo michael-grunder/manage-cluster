@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+### Fixed
+- `chaos --categories slot-migration` now waits for unreachable, failed,
+  loading, or syncing nodes to settle instead of exhausting `--max-failures`
+  after five one-second eligibility checks. With `--watch`, the wait message
+  identifies the exact blocking conditions and ports.
+
 ### Changed
 - Help, usage, and error output now name the command as it was invoked instead
   of always printing `bin/manage-cluster`. A PHAR or script resolved through
