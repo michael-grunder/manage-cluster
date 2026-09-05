@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `[-]` in the slot column, instead of disappearing from the topology.
 
 ### Added
+- Added a `chaos` client stress report reviewing current coverage and proposing
+  failover, replica reassignment, staged migration, and recovery improvements.
 - Added working `chaos --categories slot-migration`, which moves a bounded batch
   of slots between primaries with `CLUSTER SETSLOT` and `MIGRATE` and waits until
   the destination owns every migrated slot with no open migration state.
