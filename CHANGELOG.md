@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 ### Added
+- `chaos --config-file PATH` reads chaos settings from a YAML file, so a soak
+  profile can be checked in instead of retyped. The file names the same settings
+  as the options without the leading dashes (`categories`, `interval`,
+  `max-events`, `max-failures`, `abort-on-failure`, `dry-run`, `watch`, `seed`,
+  `wait-timeout`, `cooldown`, `unsafe`, `slot-strategy`, `slot-batch`), and
+  unknown settings, wrong types, and out-of-range values are reported by name
+  before the run starts. Options given on the command line override the file,
+  and `--allow-<category>` flags add to whatever it listed. `categories` is a
+  mapping of name to weight or a plain list of names, and must be enumerated:
+  the `all` alias stays exclusive to `--categories` so a saved profile cannot
+  silently pick up categories a later release adds. `chaos.dist.yml` in the
+  repository root documents every setting.
 - `chaos --watch` now opens a fullscreen `php-tui` dashboard: live cluster
   topology with slot ranges, slot counts, and per-shard replica health on top,
   and a scrolling chaos event log underneath. `j`/`k`, `Up`/`Down`, `PgUp`, and

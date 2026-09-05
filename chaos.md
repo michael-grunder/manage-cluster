@@ -45,8 +45,26 @@ chosen based on:
 `bin/manage-cluster chaos 7000 --allow-primary-failover`
 `bin/manage-cluster chaos 7000 --allow-replica-reparent`
 `bin/manage-cluster chaos 7000 --allow-primary-add --allow-primary-remove`
+`bin/manage-cluster chaos 7000 --config-file chaos.yml`
 
 ### Options
+- `--config-file PATH`
+  Read the settings below from a YAML file, so a soak profile can be checked in
+  rather than retyped. The file uses the same names as the options, without the
+  leading dashes: `categories`, `interval`, `max-events`, `max-failures`,
+  `abort-on-failure`, `dry-run`, `watch`, `seed`, `wait-timeout`, `cooldown`,
+  `unsafe`, `slot-strategy`, and `slot-batch`. Unknown settings, wrong types,
+  and out-of-range values are rejected by name before the run starts.
+
+  `categories` is a mapping of category name to weight, or a plain sequence of
+  names when the neutral weight is wanted. Unlike `--categories`, the `all`
+  alias is rejected: a file must enumerate the categories it wants so it cannot
+  silently pick up categories a later release adds.
+
+  Options given on the command line override the file, and `--allow-<category>`
+  flags add to whatever the file listed. `chaos.dist.yml` documents every
+  setting.
+
 - `--categories LIST`
   Comma-separated set of event categories allowed in this run. The literal
   value `all` expands to every supported category, so it does not have to be

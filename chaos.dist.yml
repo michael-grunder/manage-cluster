@@ -1,0 +1,86 @@
+# Example chaos run profile for manage-cluster.
+#
+#   cp chaos.dist.yml chaos.yml
+#   manage-cluster chaos 7000 --config-file chaos.yml
+#
+# Every setting below is optional and named after the chaos command line option
+# it replaces, without the leading dashes. Anything left out keeps its usual
+# default. Command line options override the file, so a saved profile can be
+# tweaked for one run:
+#
+#   manage-cluster chaos 7000 --config-file chaos.yml --max-events 20 --watch
+#
+# A boolean set to true here cannot be turned back off from the command line,
+# since the matching options are on/off flags. Leave it out, or set it to
+# false, when you want to opt in per run instead.
+
+# Which event categories the run may pick from, and how strongly to favour each
+# one. Unlike --categories, the "all" alias is not accepted here: enumerate the
+# categories you want, so a profile does not silently pick up categories that a
+# later version of manage-cluster adds.
+#
+# The weight defaults to 1 and accepts integers or decimals. Chaos scores every
+# eligible candidate on how useful it is for the current topology and draws one
+# with a probability proportional to `weight * 2 ** score`, so one score point
+# is worth a factor of two and a weight can outbid a score: 4 is worth two
+# score points, 8 is worth three. Weights never make chaos run an event that is
+# unsafe or ineligible right now.
+categories:
+  replica-kill: 1
+  replica-restart: 1
+  replica-add: 1
+  replica-reparent: 1
+  primary-failover: 0.5
+  slot-migration: 4
+  # Membership churn is heavier and slower than the rest, so it is opt-in here
+  # the same way it is on the command line.
+  # primary-add: 1
+  # primary-remove: 1
+
+# A plain list works too when every category should keep the neutral weight:
+#
+# categories:
+#   - replica-kill
+#   - replica-restart
+#   - replica-add
+
+# Minimum seconds between completed events (default: 8).
+interval: 8
+
+# Stop after this many completed events. Omit to run until interrupted.
+# max-events: 200
+
+# Abort after this many consecutive failures. 0 means unlimited (the default),
+# so a single ineligible or broken event does not end a long soak.
+max-failures: 0
+
+# Stop at the very first failed event instead of reporting it and continuing.
+abort-on-failure: false
+
+# Select and print events without mutating the cluster.
+dry-run: false
+
+# Open the fullscreen php-tui view instead of logging line by line. Falls back
+# to the line-by-line log when stdin and stdout are not a TTY.
+watch: false
+
+# Seed the PRNG for a reproducible sequence of events. Omit for a random run.
+# seed: 20250905
+
+# Maximum seconds to wait for an event to converge (default: 60).
+wait-timeout: 60
+
+# Quiet period after convergence, before the next event is selected (default: 2).
+cooldown: 2
+
+# How slot-migration picks its source and destination primaries:
+#   balanced - move slots from heavier primaries toward lighter ones (default)
+#   random   - pick source and destination without regard to balance
+slot-strategy: balanced
+
+# Maximum slots a single slot-migration event moves (default: 16, max: 16384).
+slot-batch: 16
+
+# Permit lower-redundancy actions that are otherwise skipped, such as killing
+# the last healthy replica of a shard.
+unsafe: false

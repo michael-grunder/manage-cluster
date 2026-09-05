@@ -21,7 +21,8 @@
     ],
     "require": {
         "symfony/process": "^8.0",
-        "php-tui/php-tui": "^0.2"
+        "php-tui/php-tui": "^0.2",
+        "symfony/yaml": "^8.1"
     },
     "require-dev": {
         "phpunit/phpunit": "^13.0",

@@ -104,6 +104,7 @@ final class CommandLineParser
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'chaos' => [
+            ['--config-file PATH', 'Read chaos settings from a YAML file; command line options override it'],
             ['--categories LIST', 'Allowed event categories as NAME[:WEIGHT], or all (default: %chaos-default-categories%)'],
             ['--interval SECONDS', 'Minimum time between completed chaos steps (default: 8)'],
             ['--max-events N', 'Stop after N completed events (default: unlimited)'],
@@ -203,6 +204,8 @@ final class CommandLineParser
             'chaos 7000 --categories primary-failover --watch',
             'chaos 7000 --allow-replica-reparent',
             'chaos 7000 --allow-primary-add --allow-primary-remove',
+            'chaos 7000 --config-file chaos.yml',
+            'chaos 7000 --config-file chaos.yml --max-events 20',
         ],
         'version' => [
             'version',
@@ -243,6 +246,8 @@ final class CommandLineParser
             'Any --categories entry may carry a :WEIGHT suffix, so all,slot-migration:3 keeps every category but picks slot-migration three times as often.',
             'Weights default to 1, accept fractions such as 0.5, and apply to categories enabled with --allow-<category> as well.',
             'Without --categories, chaos runs %chaos-default-categories%; every other category is opt-in.',
+            '--config-file reads the same settings from a YAML file, and any option given on the command line overrides the file.',
+            'A config file must enumerate its categories; the all alias is only accepted by --categories. See chaos.dist.yml for a documented example.',
             'When --dry-run is used without --max-events, the command prints one planned event and exits.',
             'slot-migration is opt-in through --categories or --allow-slot-migration.',
             'primary-failover is opt-in through --categories or --allow-primary-failover and promotes a caught-up replica with CLUSTER FAILOVER.',
@@ -262,6 +267,7 @@ final class CommandLineParser
 
     public function __construct(
         private readonly InvocationName $invocation = new InvocationName(InvocationName::DEFAULT_COMMAND, InvocationName::DEFAULT_COMMAND),
+        private readonly ChaosConfigLoader $chaosConfigLoader = new ChaosConfigLoader(),
     ) {
     }
 
@@ -270,6 +276,12 @@ final class CommandLineParser
      */
     public function parse(array $argv): CommandLineOptions
     {
+        // A config file is read up front so its values act as defaults that the
+        // rest of the command line overrides, which is the order operators
+        // expect from a profile plus a one-off tweak.
+        $chaosConfigPath = self::inferChaosConfigPath($argv);
+        $chaosConfig = $chaosConfigPath === null ? new ChaosConfig() : $this->chaosConfigLoader->load($chaosConfigPath);
+
         $action = null;
         $portTokens = [];
         $replicaPort = null;
@@ -294,7 +306,7 @@ final class CommandLineParser
         $tlsDays = 3650;
         $tlsRsaBits = 2048;
         $stateDir = sprintf('%s/manage-cluster', sys_get_temp_dir());
-        $watch = false;
+        $watch = $chaosConfig->watch ?? false;
         $startServerArgs = [];
         $size = null;
         $types = self::defaultFillTypes();
@@ -302,30 +314,30 @@ final class CommandLineParser
         $memberSize = self::DEFAULT_FILL_MEMBER_SIZE;
         $fillKeys = self::DEFAULT_FILL_TARGET_KEYS;
         $pinPrimaryPort = null;
-        $chaosCategories = ChaosCategorySelection::fromCategories(ChaosOptions::DEFAULT_CATEGORIES);
-        $chaosInterval = 8;
-        $chaosMaxEvents = null;
-        $chaosMaxFailures = ChaosOptions::UNLIMITED_FAILURES;
-        $chaosAbortOnFailure = false;
-        $chaosDryRun = false;
-        $chaosSeed = null;
-        $chaosWaitTimeout = 60;
-        $chaosCooldown = 2;
+        $chaosCategories = $chaosConfig->categories ?? ChaosCategorySelection::fromCategories(ChaosOptions::DEFAULT_CATEGORIES);
+        $chaosInterval = $chaosConfig->intervalSeconds ?? 8;
+        $chaosMaxEvents = $chaosConfig->maxEvents;
+        $chaosMaxFailures = $chaosConfig->maxFailures ?? ChaosOptions::UNLIMITED_FAILURES;
+        $chaosAbortOnFailure = $chaosConfig->abortOnFailure ?? false;
+        $chaosDryRun = $chaosConfig->dryRun ?? false;
+        $chaosSeed = $chaosConfig->seed;
+        $chaosWaitTimeout = $chaosConfig->waitTimeoutSeconds ?? 60;
+        $chaosCooldown = $chaosConfig->cooldownSeconds ?? 2;
         $chaosAllowSlotMigration = false;
         $chaosAllowPrimaryFailover = false;
         $chaosAllowReplicaReparent = false;
         $chaosAllowPrimaryAdd = false;
         $chaosAllowPrimaryRemove = false;
-        $chaosSlotStrategy = SlotMigrationStrategy::Balanced;
-        $chaosSlotStrategyProvided = false;
-        $chaosSlotBatch = ChaosOptions::DEFAULT_SLOT_MIGRATION_BATCH;
-        $chaosSlotBatchProvided = false;
-        $chaosUnsafe = false;
+        $chaosSlotStrategy = $chaosConfig->slotMigrationStrategy ?? SlotMigrationStrategy::Balanced;
+        $chaosSlotStrategyProvided = $chaosConfig->slotMigrationStrategy !== null;
+        $chaosSlotBatch = $chaosConfig->slotMigrationBatch ?? ChaosOptions::DEFAULT_SLOT_MIGRATION_BATCH;
+        $chaosSlotBatchProvided = $chaosConfig->slotMigrationBatch !== null;
+        $chaosUnsafe = $chaosConfig->unsafe ?? false;
+        $chaosCategoriesProvided = $chaosConfig->categories !== null;
         $typesProvided = false;
         $membersProvided = false;
         $memberSizeProvided = false;
         $fillKeysProvided = false;
-        $chaosCategoriesProvided = false;
 
         for ($i = 1; $i < count($argv); $i++) {
             $arg = $argv[$i];
@@ -424,6 +436,12 @@ final class CommandLineParser
                 case '--method':
                     $killMethod = KillMethod::parse($this->parseStringOption($argv, ++$i, '--method'));
                     $killMethodProvided = true;
+                    break;
+
+                case '--config-file':
+                    // Already read before this loop so it can seed defaults;
+                    // consume its value and keep the usual validation.
+                    $this->parseStringOption($argv, ++$i, '--config-file');
                     break;
 
                 case '--categories':
@@ -572,6 +590,12 @@ final class CommandLineParser
 
         if ($action === null) {
             throw new InvalidArgumentException(sprintf('Missing action: use %s.', self::actionChoiceMessage()));
+        }
+
+        // Checked before every other option, because a setting the file seeded
+        // would otherwise be reported as if the operator had passed it.
+        if ($action !== 'chaos' && $chaosConfigPath !== null) {
+            throw new InvalidArgumentException('--config-file can only be used with chaos.');
         }
 
         if ($action === 'start' && $replicas < 0) {
@@ -1064,6 +1088,39 @@ final class CommandLineParser
     }
 
     /**
+     * Find `--config-file PATH` before the main option loop runs, so the file
+     * can supply the defaults that loop then overrides. Anything after `--` is
+     * a server argument and is deliberately not searched.
+     *
+     * @param list<string> $argv
+     */
+    private static function inferChaosConfigPath(array $argv): ?string
+    {
+        $path = null;
+        for ($i = 1; $i < count($argv); $i++) {
+            if ($argv[$i] === '--') {
+                break;
+            }
+
+            if ($argv[$i] !== '--config-file') {
+                continue;
+            }
+
+            $value = $argv[$i + 1] ?? null;
+            if (!is_string($value) || str_starts_with($value, '-')) {
+                throw new InvalidArgumentException('--config-file expects a value.');
+            }
+
+            // A later --config-file wins, matching how every other option that
+            // takes a value behaves.
+            $path = $value;
+            $i++;
+        }
+
+        return $path;
+    }
+
+    /**
      * @param list<string> $argv
      */
     public static function inferRequestedAction(array $argv): ?string
@@ -1095,6 +1152,7 @@ final class CommandLineParser
             '--wait-timeout' => true,
             '--cooldown' => true,
             '--config' => true,
+            '--config-file' => true,
         ];
 
         for ($i = 1; $i < count($argv); $i++) {

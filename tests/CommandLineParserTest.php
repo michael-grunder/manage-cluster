@@ -15,6 +15,22 @@ use PHPUnit\Framework\TestCase;
 
 final class CommandLineParserTest extends TestCase
 {
+    /**
+     * @var list<string>
+     */
+    private array $chaosConfigFiles = [];
+
+    protected function tearDown(): void
+    {
+        foreach ($this->chaosConfigFiles as $path) {
+            if (is_file($path)) {
+                unlink($path);
+            }
+        }
+
+        $this->chaosConfigFiles = [];
+    }
+
     private static function parserNamed(string $display = 'bin/manage-cluster'): CommandLineParser
     {
         return new CommandLineParser(new InvocationName($display, 'manage-cluster'));
@@ -1325,5 +1341,168 @@ final class CommandLineParserTest extends TestCase
         $this->expectExceptionMessage('--slot-batch can only be used with chaos.');
 
         $parser->parse(['bin/manage-cluster', 'status', '7000', '--slot-batch', '8']);
+    }
+
+    public function testChaosConfigFileSuppliesEveryChaosSetting(): void
+    {
+        $path = $this->writeChaosConfig(<<<'YAML'
+        categories:
+          slot-migration: 4
+          primary-failover: 0.5
+        interval: 12
+        max-events: 25
+        max-failures: 3
+        abort-on-failure: true
+        dry-run: true
+        watch: true
+        seed: 20250905
+        wait-timeout: 90
+        cooldown: 5
+        unsafe: true
+        slot-strategy: random
+        slot-batch: 64
+        YAML);
+
+        $options = new CommandLineParser()->parse(['bin/manage-cluster', 'chaos', '7000', '--config-file', $path]);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame('slot-migration:4,primary-failover:0.5', $options->chaos->categories->describe());
+        self::assertSame(12, $options->chaos->intervalSeconds);
+        self::assertSame(25, $options->chaos->maxEvents);
+        self::assertSame(3, $options->chaos->maxFailures);
+        self::assertTrue($options->chaos->abortOnFailure);
+        self::assertTrue($options->chaos->dryRun);
+        self::assertTrue($options->chaos->watch);
+        self::assertTrue($options->watch);
+        self::assertSame(20250905, $options->chaos->seed);
+        self::assertSame(90, $options->chaos->waitTimeoutSeconds);
+        self::assertSame(5, $options->chaos->cooldownSeconds);
+        self::assertTrue($options->chaos->unsafe);
+        self::assertSame(SlotMigrationStrategy::Random, $options->chaos->slotMigrationStrategy);
+        self::assertSame(64, $options->chaos->slotMigrationBatch);
+    }
+
+    public function testCommandLineOptionsOverrideTheChaosConfigFile(): void
+    {
+        $path = $this->writeChaosConfig(<<<'YAML'
+        categories:
+          slot-migration: 4
+        interval: 12
+        slot-strategy: random
+        slot-batch: 64
+        YAML);
+
+        $options = new CommandLineParser()->parse([
+            'bin/manage-cluster',
+            'chaos',
+            '7000',
+            '--config-file',
+            $path,
+            '--categories',
+            'replica-kill:2',
+            '--interval',
+            '3',
+            '--slot-strategy',
+            'balanced',
+        ]);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame('replica-kill:2', $options->chaos->categories->describe());
+        self::assertSame(3, $options->chaos->intervalSeconds);
+        self::assertSame(SlotMigrationStrategy::Balanced, $options->chaos->slotMigrationStrategy);
+        // Untouched on the command line, so the file still wins over the default.
+        self::assertSame(64, $options->chaos->slotMigrationBatch);
+    }
+
+    public function testAllowFlagsAddToTheCategoriesAConfigFileEnumerated(): void
+    {
+        $path = $this->writeChaosConfig(<<<'YAML'
+        categories:
+          replica-kill: 2
+        YAML);
+
+        $options = new CommandLineParser()->parse([
+            'bin/manage-cluster',
+            'chaos',
+            '7000',
+            '--config-file',
+            $path,
+            '--allow-primary-failover',
+        ]);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame('replica-kill:2,primary-failover', $options->chaos->categories->describe());
+    }
+
+    public function testTheLastChaosConfigFileWins(): void
+    {
+        $first = $this->writeChaosConfig("interval: 11\n");
+        $second = $this->writeChaosConfig("interval: 22\n");
+
+        $options = new CommandLineParser()->parse([
+            'bin/manage-cluster',
+            'chaos',
+            '7000',
+            '--config-file',
+            $first,
+            '--config-file',
+            $second,
+        ]);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame(22, $options->chaos->intervalSeconds);
+    }
+
+    public function testConfigFileOptionIsRejectedOutsideChaos(): void
+    {
+        $path = $this->writeChaosConfig("interval: 12\n");
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--config-file can only be used with chaos.');
+
+        new CommandLineParser()->parse(['bin/manage-cluster', 'status', '7000', '--config-file', $path]);
+    }
+
+    /**
+     * A setting the file seeded must not be reported as if it had been typed:
+     * `list --config-file profile.yml` is a --config-file problem even when the
+     * profile happens to set `watch`.
+     */
+    public function testConfigFileRejectionOutranksTheSettingsItSeeded(): void
+    {
+        $path = $this->writeChaosConfig("watch: true\ninterval: 12\n");
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--config-file can only be used with chaos.');
+
+        new CommandLineParser()->parse(['bin/manage-cluster', 'list', '--config-file', $path]);
+    }
+
+    public function testConfigFileOptionRequiresAValue(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--config-file expects a value.');
+
+        new CommandLineParser()->parse(['bin/manage-cluster', 'chaos', '7000', '--config-file']);
+    }
+
+    public function testConfigFileErrorsSurfaceFromTheParser(): void
+    {
+        $path = $this->writeChaosConfig("categories:\n  all: 2\n");
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessageMatches('/must enumerate categories explicitly/');
+
+        new CommandLineParser()->parse(['bin/manage-cluster', 'chaos', '7000', '--config-file', $path]);
+    }
+
+    private function writeChaosConfig(string $yaml): string
+    {
+        $path = tempnam(sys_get_temp_dir(), 'manage-cluster-chaos-config');
+        self::assertIsString($path);
+        $this->chaosConfigFiles[] = $path;
+        self::assertNotFalse(file_put_contents($path, $yaml));
+
+        return $path;
     }
 }

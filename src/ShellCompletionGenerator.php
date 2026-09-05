@@ -56,7 +56,7 @@ _{$functionName}()
     command=""
 
     case "\$prev" in
-        --binary|--redis-cli|--gen-script)
+        --binary|--redis-cli|--gen-script|--config-file)
             COMPREPLY=( \$(compgen -f -- "\$cur") )
             return 0
             ;;

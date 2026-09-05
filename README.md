@@ -354,6 +354,14 @@ bin/manage-cluster chaos 7000 --allow-primary-add --allow-primary-remove
 
 Useful options:
 
+- `--config-file PATH` reads chaos settings from a YAML file, so a soak profile
+  can live in the repository instead of a shell alias. Copy `chaos.dist.yml`,
+  which documents every setting, and pass it with
+  `chaos 7000 --config-file chaos.yml`. Options given on the command line
+  override the file, so `--config-file chaos.yml --max-events 20` runs the saved
+  profile for twenty events. A config file must enumerate the categories it
+  wants; the `all` alias is only accepted by `--categories`, so a saved profile
+  cannot silently pick up categories a later release adds
 - `--categories LIST` limits event selection to `replica-kill`,
   `replica-restart`, `replica-remove`, `replica-add`, `replica-reparent`,
   `primary-add`, `primary-remove`, `slot-migration`, and `primary-failover`;
@@ -421,6 +429,52 @@ Behavior notes:
   topology-based postcondition before the next one can start
 - `--dry-run` with no `--max-events` prints a single planned step and exits
 - Requires saved managed-cluster metadata in the configured `--state-dir`
+
+#### Run profiles
+
+`--config-file PATH` reads chaos settings from YAML. `chaos.dist.yml` in the
+repository root is a documented starting point; copy it and edit it:
+
+```bash
+cp chaos.dist.yml chaos.yml
+bin/manage-cluster chaos 7000 --config-file chaos.yml
+```
+
+The file names the same settings as the command line options, without the
+leading dashes:
+
+```yaml
+categories:
+  replica-kill: 1
+  replica-restart: 1
+  replica-add: 1
+  slot-migration: 4
+  primary-failover: 0.5
+interval: 8
+wait-timeout: 60
+cooldown: 2
+slot-strategy: balanced
+slot-batch: 16
+unsafe: false
+```
+
+Supported settings are `categories`, `interval`, `max-events`, `max-failures`,
+`abort-on-failure`, `dry-run`, `watch`, `seed`, `wait-timeout`, `cooldown`,
+`unsafe`, `slot-strategy`, and `slot-batch`. Anything else is rejected by name,
+as are out-of-range values, so a typo fails immediately rather than part-way
+into a long soak.
+
+- `categories` is a mapping of category name to weight, or a plain list of names
+  when every category should keep the neutral weight `1`. A name written with no
+  value, as in `slot-migration:`, also means weight `1`
+- Categories must be enumerated. The `all` alias is only accepted by
+  `--categories`, so a checked-in profile cannot silently pick up categories a
+  later release adds
+- Command line options override the file, and `--allow-<category>` flags add to
+  whatever the file listed
+- A boolean set to `true` in the file cannot be turned back off from the command
+  line, because the matching options are on/off flags. Leave it out, or set it
+  to `false`, to opt in per run instead
 
 #### Slot migration
 
