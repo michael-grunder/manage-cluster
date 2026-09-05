@@ -47,7 +47,9 @@ chosen based on:
 
 ### Options
 - `--categories LIST`
-  Comma-separated set of event categories allowed in this run.
+  Comma-separated set of event categories allowed in this run. The literal
+  value `all` expands to every supported category, so it does not have to be
+  enumerated, and it can be combined with individual categories.
 
   Initial supported categories:
   - `replica-kill`

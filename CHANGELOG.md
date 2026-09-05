@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+### Added
+- `chaos --categories all` enables every event category without enumerating
+  them, and `all` can also be mixed into a comma-separated list.
+
 ### Fixed
 - `chaos` now reloads managed cluster metadata before each event, so ports added
   or removed during a run are tracked instead of the run acting on the port list
@@ -16,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identifies the exact blocking conditions and ports.
 
 ### Changed
+- `help chaos` now documents the default event categories
+  (`replica-kill,replica-restart,replica-add`) and lists every category
+  `--categories` accepts, including `all`.
 - Command help now widens the option column to fit the longest option name, so
   descriptions stay aligned for commands with long options such as
   `chaos --allow-primary-failover`.

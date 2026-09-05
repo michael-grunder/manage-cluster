@@ -104,7 +104,7 @@ final class CommandLineParser
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'chaos' => [
-            ['--categories LIST', 'Allowed events: replica-kill,replica-restart,replica-remove,replica-add,replica-reparent,primary-add,primary-remove,slot-migration,primary-failover'],
+            ['--categories LIST', 'Allowed event categories, or all (default: %chaos-default-categories%)'],
             ['--interval SECONDS', 'Minimum time between completed chaos steps (default: 8)'],
             ['--max-events N', 'Stop after N completed events (default: unlimited)'],
             ['--max-failures N', 'Abort after N consecutive failures (default: 5)'],
@@ -191,6 +191,7 @@ final class CommandLineParser
         'chaos' => [
             'chaos 7000',
             'chaos 7000 --categories replica-kill,replica-restart',
+            'chaos 7000 --categories all',
             'chaos 7000 --max-events 50',
             'chaos 7000 --interval 8 --watch',
             'chaos 7000 --dry-run',
@@ -236,6 +237,8 @@ final class CommandLineParser
         ],
         'chaos' => [
             'chaos executes replica kill, restart, add, and reparent, primary add and remove, bounded slot migration, and coordinated primary failover.',
+            '--categories accepts %chaos-categories%, or all for every category.',
+            'Without --categories, chaos runs %chaos-default-categories%; every other category is opt-in.',
             'When --dry-run is used without --max-events, the command prints one planned event and exits.',
             'slot-migration is opt-in through --categories or --allow-slot-migration.',
             'primary-failover is opt-in through --categories or --allow-primary-failover and promotes a caught-up replica with CLUSTER FAILOVER.',
@@ -951,7 +954,10 @@ final class CommandLineParser
      */
     public static function commandOptions(string $action): array
     {
-        return self::COMMAND_OPTIONS[$action] ?? [];
+        return array_values(array_map(
+            static fn (array $specification): array => [$specification[0], self::expandHelpText($specification[1])],
+            self::COMMAND_OPTIONS[$action] ?? [],
+        ));
     }
 
     /**
@@ -1020,8 +1026,9 @@ final class CommandLineParser
             self::formatHeading('Options', $interactive) . ':',
         ];
 
-        $width = self::optionColumnWidth(self::COMMAND_OPTIONS[$action]);
-        foreach (self::COMMAND_OPTIONS[$action] as [$option, $description]) {
+        $options = self::commandOptions($action);
+        $width = self::optionColumnWidth($options);
+        foreach ($options as [$option, $description]) {
             $lines[] = self::formatAlignedRow($option, $description, $interactive, $width);
         }
 
@@ -1035,7 +1042,7 @@ final class CommandLineParser
             $lines[] = '';
             $lines[] = self::formatHeading('Notes', $interactive) . ':';
             foreach ($notes as $note) {
-                $lines[] = '  ' . $note;
+                $lines[] = '  ' . self::expandHelpText($note);
             }
         }
 
@@ -1395,18 +1402,39 @@ final class CommandLineParser
      */
     private function parseChaosCategories(string $value): array
     {
-        $categories = array_values(array_filter(array_map('trim', explode(',', strtolower($value))), static fn (string $category): bool => $category !== ''));
-        if ($categories === []) {
+        $tokens = array_values(array_filter(array_map('trim', explode(',', strtolower($value))), static fn (string $token): bool => $token !== ''));
+        if ($tokens === []) {
             throw new InvalidArgumentException('--categories must contain at least one event category.');
         }
 
-        foreach ($categories as $category) {
-            if (!in_array($category, ChaosOptions::SUPPORTED_CATEGORIES, true)) {
-                throw new InvalidArgumentException(sprintf('Unsupported chaos category: %s', $category));
+        $categories = [];
+        foreach ($tokens as $token) {
+            if ($token === ChaosOptions::CATEGORY_ALIAS_ALL) {
+                $categories = [...$categories, ...ChaosOptions::SUPPORTED_CATEGORIES];
+
+                continue;
             }
+
+            if (!in_array($token, ChaosOptions::SUPPORTED_CATEGORIES, true)) {
+                throw new InvalidArgumentException(sprintf('Unsupported chaos category: %s', $token));
+            }
+
+            $categories[] = $token;
         }
 
         return array_values(array_unique($categories));
+    }
+
+    /**
+     * Expand help placeholders so option and note text stays in sync with the
+     * chaos category constants.
+     */
+    private static function expandHelpText(string $text): string
+    {
+        return strtr($text, [
+            '%chaos-categories%' => implode(', ', ChaosOptions::SUPPORTED_CATEGORIES),
+            '%chaos-default-categories%' => implode(',', ChaosOptions::DEFAULT_CATEGORIES),
+        ]);
     }
 
     private static function formatHeading(string $text, bool $interactive): string

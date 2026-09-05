@@ -339,6 +339,7 @@ rather than a fully generic chaos monkey.
 ```bash
 bin/manage-cluster chaos 7000
 bin/manage-cluster chaos 7000 --categories replica-kill,replica-restart
+bin/manage-cluster chaos 7000 --categories all
 bin/manage-cluster chaos 7000 --max-events 50
 bin/manage-cluster chaos 7000 --interval 8 --watch
 bin/manage-cluster chaos 7000 --dry-run
@@ -354,7 +355,10 @@ Useful options:
 
 - `--categories LIST` limits event selection to `replica-kill`,
   `replica-restart`, `replica-remove`, `replica-add`, `replica-reparent`,
-  `primary-add`, `primary-remove`, `slot-migration`, and `primary-failover`
+  `primary-add`, `primary-remove`, `slot-migration`, and `primary-failover`;
+  pass `all` instead of a list to allow every category. Without
+  `--categories`, chaos runs `replica-kill`, `replica-restart`, and
+  `replica-add`, and every other category is opt-in
 - `--interval SECONDS` sets the minimum time between completed steps
 - `--max-events N` stops after N completed events
 - `--max-failures N` aborts after N consecutive execution or convergence failures

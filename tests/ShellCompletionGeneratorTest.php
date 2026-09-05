@@ -22,7 +22,7 @@ final class ShellCompletionGeneratorTest extends TestCase
         self::assertStringContainsString('compgen -W "balanced random"', $script);
         self::assertStringContainsString('--categories)', $script);
         self::assertStringContainsString(
-            'compgen -W "replica-kill replica-restart replica-remove replica-add replica-reparent primary-add primary-remove slot-migration primary-failover"',
+            'compgen -W "replica-kill replica-restart replica-remove replica-add replica-reparent primary-add primary-remove slot-migration primary-failover all"',
             $script,
         );
         self::assertStringContainsString('--allow-primary-failover', $script);

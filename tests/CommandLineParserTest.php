@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mgrunder\CreateCluster\Tests;
 
 use InvalidArgumentException;
+use Mgrunder\CreateCluster\ChaosOptions;
 use Mgrunder\CreateCluster\CommandLineParser;
 use Mgrunder\CreateCluster\InvocationName;
 use Mgrunder\CreateCluster\KillMethod;
@@ -60,6 +61,19 @@ final class CommandLineParserTest extends TestCase
         self::assertStringContainsString('bin/manage-cluster chaos SEED_PORT', $usage);
         self::assertStringContainsString('--categories LIST', $usage);
         self::assertStringContainsString('bin/manage-cluster chaos 7000 --dry-run', $usage);
+        self::assertStringContainsString('bin/manage-cluster chaos 7000 --categories all', $usage);
+        self::assertStringContainsString(
+            sprintf('or all (default: %s)', implode(',', ChaosOptions::DEFAULT_CATEGORIES)),
+            $usage,
+        );
+        self::assertStringContainsString(
+            sprintf('--categories accepts %s, or all for every category.', implode(', ', ChaosOptions::SUPPORTED_CATEGORIES)),
+            $usage,
+        );
+        self::assertStringContainsString(
+            sprintf('Without --categories, chaos runs %s;', implode(',', ChaosOptions::DEFAULT_CATEGORIES)),
+            $usage,
+        );
     }
 
     public function testContextualUsageForCompletionsIncludesExamples(): void
@@ -919,6 +933,32 @@ final class CommandLineParserTest extends TestCase
         $this->expectExceptionMessage('Unsupported kill method: sigusr1');
 
         $parser->parse(['bin/manage-cluster', 'kill', '7000', '--method', 'sigusr1']);
+    }
+
+    public function testChaosCategoriesAllSelectsEverySupportedCategory(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'chaos', '7000', '--categories', 'all']);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame(ChaosOptions::SUPPORTED_CATEGORIES, $options->chaos->categories);
+    }
+
+    public function testChaosCategoriesAllIsCaseInsensitiveAndDeduplicated(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'chaos', '7000', '--categories', 'replica-kill,ALL,slot-migration']);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame(
+            [ChaosOptions::CATEGORY_REPLICA_KILL, ...array_values(array_filter(
+                ChaosOptions::SUPPORTED_CATEGORIES,
+                static fn (string $category): bool => $category !== ChaosOptions::CATEGORY_REPLICA_KILL,
+            ))],
+            $options->chaos->categories,
+        );
     }
 
     public function testChaosRejectsUnknownCategory(): void

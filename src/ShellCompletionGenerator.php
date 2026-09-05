@@ -41,7 +41,7 @@ final class ShellCompletionGenerator
         $globalOptions = $this->bashWords($this->optionNames(CommandLineParser::globalOptionSpecs()));
         $shells = $this->bashWords(self::SUPPORTED_SHELLS);
         $slotStrategies = $this->bashWords(SlotMigrationStrategy::names());
-        $chaosCategories = $this->bashWords(ChaosOptions::SUPPORTED_CATEGORIES);
+        $chaosCategories = $this->bashWords([...ChaosOptions::SUPPORTED_CATEGORIES, ChaosOptions::CATEGORY_ALIAS_ALL]);
         $commandPattern = implode('|', [...CommandLineParser::actionNames(), 'help']);
         $optionCases = $this->bashOptionCases();
 

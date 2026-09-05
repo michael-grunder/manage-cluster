@@ -17,6 +17,11 @@ final readonly class ChaosOptions
     public const string CATEGORY_PRIMARY_FAILOVER = 'primary-failover';
 
     /**
+     * Alias accepted by `--categories` that expands to every supported category.
+     */
+    public const string CATEGORY_ALIAS_ALL = 'all';
+
+    /**
      * @var list<string>
      */
     public const array SUPPORTED_CATEGORIES = [
