@@ -4,3 +4,5 @@
 .phpunit.cache
 redis.stub.php
 redis_cluster.stub.php
+.phpstan.json
+.phpactor.json
