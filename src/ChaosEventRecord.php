@@ -25,6 +25,8 @@ final readonly class ChaosEventRecord
         public ?SlotMigrationPlan $slotMigrationPlan = null,
         public ?PrimaryFailoverPlan $primaryFailoverPlan = null,
         public ?ReplicaReparentPlan $replicaReparentPlan = null,
+        public ?PrimaryAddPlan $primaryAddPlan = null,
+        public ?PrimaryRemovePlan $primaryRemovePlan = null,
     ) {
     }
 
@@ -48,6 +50,8 @@ final readonly class ChaosEventRecord
             slotMigrationPlan: $this->slotMigrationPlan,
             primaryFailoverPlan: $this->primaryFailoverPlan,
             replicaReparentPlan: $this->replicaReparentPlan,
+            primaryAddPlan: $this->primaryAddPlan,
+            primaryRemovePlan: $this->primaryRemovePlan,
         );
     }
 }

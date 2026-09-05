@@ -18,8 +18,11 @@ use Mgrunder\CreateCluster\ManagedClusterSummaryTuiRenderer;
 use Mgrunder\CreateCluster\RedisNodeClient;
 use Mgrunder\CreateCluster\ReplicaReparentEligibility;
 use Mgrunder\CreateCluster\ReplicaReparentPlanner;
+use Mgrunder\CreateCluster\PrimaryAddPlanner;
 use Mgrunder\CreateCluster\PrimaryFailoverEligibility;
 use Mgrunder\CreateCluster\PrimaryFailoverPlanner;
+use Mgrunder\CreateCluster\PrimaryMembershipEligibility;
+use Mgrunder\CreateCluster\PrimaryRemovePlanner;
 use Mgrunder\CreateCluster\ShellCompletionGenerator;
 use Mgrunder\CreateCluster\SlotMigrationEligibility;
 use Mgrunder\CreateCluster\SlotMigrationPlanner;
@@ -94,6 +97,9 @@ $manager = new ClusterManager(
     primaryFailoverPlanner: new PrimaryFailoverPlanner(),
     replicaReparentEligibility: new ReplicaReparentEligibility(),
     replicaReparentPlanner: new ReplicaReparentPlanner(),
+    primaryMembershipEligibility: new PrimaryMembershipEligibility(),
+    primaryAddPlanner: new PrimaryAddPlanner(),
+    primaryRemovePlanner: new PrimaryRemovePlanner(),
     slotMigrator: new SlotMigrator(new RedisNodeClient(), $output),
     output: $output,
 );

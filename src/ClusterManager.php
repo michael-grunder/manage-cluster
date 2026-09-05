@@ -12,6 +12,7 @@ final class ClusterManager
 {
     private const int CHAOS_STABLE_POLLS = 2;
     private const int CHAOS_PRIMARY_REPLICA_CAP = 2;
+    private const int CHAOS_PRIMARY_CAP = 6;
     private const float STOP_SHUTDOWN_GRACE_SECONDS = 2.0;
     private const float STOP_SIGNAL_WAIT_SECONDS = 1.0;
     private const int REPLICA_STATE_WAIT_POLL_MICROSECONDS = 250_000;
@@ -34,6 +35,9 @@ final class ClusterManager
         private readonly PrimaryFailoverPlanner $primaryFailoverPlanner,
         private readonly ReplicaReparentEligibility $replicaReparentEligibility,
         private readonly ReplicaReparentPlanner $replicaReparentPlanner,
+        private readonly PrimaryMembershipEligibility $primaryMembershipEligibility,
+        private readonly PrimaryAddPlanner $primaryAddPlanner,
+        private readonly PrimaryRemovePlanner $primaryRemovePlanner,
         private readonly SlotMigrator $slotMigrator,
         private readonly ConsoleOutput $output,
     ) {
@@ -1320,10 +1324,12 @@ final class ClusterManager
             ChaosOptions::CATEGORY_SLOT_MIGRATION,
             ChaosOptions::CATEGORY_PRIMARY_FAILOVER,
             ChaosOptions::CATEGORY_REPLICA_REPARENT,
+            ChaosOptions::CATEGORY_PRIMARY_ADD,
+            ChaosOptions::CATEGORY_PRIMARY_REMOVE,
         ];
 
         if (array_intersect($chaos->categories, $implementedCategories) === []) {
-            throw new RuntimeException('chaos currently implements replica-kill, replica-restart, replica-add, replica-reparent, slot-migration, and primary-failover.');
+            throw new RuntimeException('chaos currently implements replica-kill, replica-restart, replica-add, replica-reparent, primary-add, primary-remove, slot-migration, and primary-failover.');
         }
 
         if ($chaos->seed !== null) {
@@ -1353,6 +1359,11 @@ final class ClusterManager
 
                 return;
             }
+
+            // Events that add or remove nodes rewrite the managed port list, so
+            // reload it before every decision instead of trusting the copy the
+            // run started with.
+            $metadata = $this->refreshChaosMetadata($metadata, $seedPort);
 
             $view = $this->discoverChaosClusterView($runtime, $metadata, $seedPort, $tls, $caCert);
             if ($view->clusterDown) {
@@ -1462,30 +1473,18 @@ final class ClusterManager
             throw new RuntimeException(sprintf('Port %d is already in use.', $selectedReplicaPort));
         }
 
-        $clusterDir = $this->resolveReplicaClusterDirectory($primaryNode->port, $tls, $caCert, $metadata);
-        $this->output->info(sprintf('Using cluster directory %s', $clusterDir));
-
-        $configPath = $this->writeNodeConfiguration(
-            clusterDir: $clusterDir,
+        $this->startAndMeetManagedNode(
+            options: $options,
+            metadata: $metadata,
+            meetNode: $primaryNode,
             port: $selectedReplicaPort,
-            announceIp: $options->announceIp,
             tls: $tls,
+            caCert: $caCert,
             tlsMaterial: $tlsMaterial,
+            role: 'Replica',
         );
 
-        $this->output->step(sprintf('Starting Redis node on port %d', $selectedReplicaPort));
         try {
-            $this->runProcess([$options->redisBinary, $configPath]);
-            $this->redisNodeClient->waitForReady($selectedReplicaPort, $tls, $caCert);
-            $this->output->success(sprintf('Redis node %d is ready', $selectedReplicaPort));
-
-            $meetHost = $this->resolveNodeHost($primaryNode);
-
-            $this->output->step(sprintf('Sending CLUSTER MEET to %s:%d', $meetHost, $primaryNode->port));
-            $this->redisNodeClient->clusterMeet($selectedReplicaPort, $tls, $caCert, $meetHost, $primaryNode->port);
-            $this->redisNodeClient->waitForKnownClusterNode($selectedReplicaPort, $tls, $caCert, $primaryNode->id);
-            $this->output->success('Replica joined cluster gossip');
-
             $this->output->step(sprintf('Sending CLUSTER REPLICATE %s', $primaryNode->shortId()));
             $this->redisNodeClient->clusterReplicate($selectedReplicaPort, $tls, $caCert, $primaryNode->id);
             $this->waitForReplicaAttachment($seedPort, $primaryNode->port, $selectedReplicaPort, $tls, $caCert);
@@ -1499,6 +1498,110 @@ final class ClusterManager
         $this->persistClusterMetadataPortAddition($metadata, $selectedReplicaPort);
 
         return $selectedReplicaPort;
+    }
+
+    /**
+     * Start a managed node from the cluster's own directory and join it to the
+     * cluster with `CLUSTER MEET`. The node is a primary owning no slots until
+     * the caller either replicates it or migrates slots into it; a failure
+     * anywhere in here stops the process again so nothing is left half-joined.
+     *
+     * @param array<string, mixed>|null $metadata
+     * @param array{ca_cert: string, server_cert: string, server_key: string}|null $tlsMaterial
+     */
+    private function startAndMeetManagedNode(
+        CommandLineOptions $options,
+        ?array $metadata,
+        ClusterNodeStatus $meetNode,
+        int $port,
+        bool $tls,
+        ?string $caCert,
+        ?array $tlsMaterial,
+        string $role,
+    ): void {
+        $clusterDir = $this->resolveReplicaClusterDirectory($meetNode->port, $tls, $caCert, $metadata);
+        $this->output->info(sprintf('Using cluster directory %s', $clusterDir));
+
+        $configPath = $this->writeNodeConfiguration(
+            clusterDir: $clusterDir,
+            port: $port,
+            announceIp: $options->announceIp,
+            tls: $tls,
+            tlsMaterial: $tlsMaterial,
+        );
+
+        $this->output->step(sprintf('Starting Redis node on port %d', $port));
+        try {
+            $this->runProcess([$options->redisBinary, $configPath]);
+            $this->redisNodeClient->waitForReady($port, $tls, $caCert);
+            $this->output->success(sprintf('Redis node %d is ready', $port));
+
+            $meetHost = $this->resolveNodeHost($meetNode);
+
+            $this->output->step(sprintf('Sending CLUSTER MEET to %s:%d', $meetHost, $meetNode->port));
+            $this->redisNodeClient->clusterMeet($port, $tls, $caCert, $meetHost, $meetNode->port);
+            $this->redisNodeClient->waitForKnownClusterNode($port, $tls, $caCert, $meetNode->id);
+            $this->output->success(sprintf('%s joined cluster gossip', $role));
+        } catch (\Throwable $exception) {
+            $this->output->warning(sprintf('%s setup failed; shutting down port %d', $role, $port));
+            $this->redisNodeClient->shutdown($port, $tls, $caCert);
+            $this->systemInspector->waitForPortsToClose([$port]);
+            throw $exception;
+        }
+    }
+
+    /**
+     * Add an empty managed primary to an existing cluster. It owns no slots
+     * until a migration gives it some, which is the second half of a chaos
+     * primary-add event.
+     *
+     * @param array<string, mixed>|null $metadata
+     * @param array{ca_cert: string, server_cert: string, server_key: string}|null $tlsMaterial
+     * @param list<int> $usedPorts
+     */
+    private function createPrimaryNode(
+        CommandLineOptions $options,
+        ?array $metadata,
+        ClusterNodeStatus $meetNode,
+        int $port,
+        bool $tls,
+        ?string $caCert,
+        ?array $tlsMaterial,
+        array $usedPorts,
+    ): string {
+        if (in_array($port, $usedPorts, true)) {
+            throw new RuntimeException(sprintf('Requested primary port %d is already part of the cluster.', $port));
+        }
+
+        if ($this->systemInspector->isPortListening($port)) {
+            throw new RuntimeException(sprintf('Port %d is already in use.', $port));
+        }
+
+        $this->startAndMeetManagedNode(
+            options: $options,
+            metadata: $metadata,
+            meetNode: $meetNode,
+            port: $port,
+            tls: $tls,
+            caCert: $caCert,
+            tlsMaterial: $tlsMaterial,
+            role: 'Primary',
+        );
+
+        try {
+            $nodeId = $this->redisNodeClient->clusterMyId($port, $tls, $caCert);
+            // The donor has to know the new node before it can hand slots over.
+            $this->redisNodeClient->waitForKnownClusterNode($meetNode->port, $tls, $caCert, $nodeId);
+        } catch (\Throwable $exception) {
+            $this->output->warning(sprintf('Primary setup failed; shutting down port %d', $port));
+            $this->redisNodeClient->shutdown($port, $tls, $caCert);
+            $this->systemInspector->waitForPortsToClose([$port]);
+            throw $exception;
+        }
+
+        $this->persistClusterMetadataPortAddition($metadata, $port);
+
+        return $nodeId;
     }
 
     private function resolveNodeHost(ClusterNodeStatus $node): string
@@ -1812,7 +1915,7 @@ final class ClusterManager
                     continue;
                 }
 
-                $replicaPort = $this->selectChaosReplicaPort($view);
+                $replicaPort = $this->selectChaosNodePort($view);
                 if ($replicaPort === null) {
                     continue;
                 }
@@ -1904,6 +2007,19 @@ final class ClusterManager
         if (in_array(ChaosOptions::CATEGORY_REPLICA_REPARENT, $chaos->categories, true)) {
             foreach ($this->buildReplicaReparentCandidates($view, $runtime, $chaos) as $reparent) {
                 $candidates[] = $reparent;
+            }
+        }
+
+        if (in_array(ChaosOptions::CATEGORY_PRIMARY_ADD, $chaos->categories, true)) {
+            $primaryAdd = $this->buildPrimaryAddCandidate($view, $runtime, $chaos);
+            if ($primaryAdd instanceof ChaosCandidateEvent) {
+                $candidates[] = $primaryAdd;
+            }
+        }
+
+        if (in_array(ChaosOptions::CATEGORY_PRIMARY_REMOVE, $chaos->categories, true)) {
+            foreach ($this->buildPrimaryRemoveCandidates($view, $runtime, $chaos) as $primaryRemove) {
+                $candidates[] = $primaryRemove;
             }
         }
 
@@ -2150,6 +2266,148 @@ final class ClusterManager
     }
 
     /**
+     * Growing the cluster is two steps in one event: join an empty managed
+     * primary, then hand it a bounded slice of the busiest primary's slots, so
+     * clients see a node appear and then start owning keys.
+     */
+    private function buildPrimaryAddCandidate(
+        ChaosClusterView $view,
+        ChaosRuntimeState $runtime,
+        ChaosOptions $chaos,
+    ): ?ChaosCandidateEvent {
+        if ($this->primaryMembershipEligibility->blockers($view, $chaos->unsafe) !== []) {
+            return null;
+        }
+
+        if (count($view->primaryStateByPort) >= self::CHAOS_PRIMARY_CAP) {
+            return null;
+        }
+
+        $newPort = $this->selectChaosNodePort($view);
+        if ($newPort === null) {
+            return null;
+        }
+
+        return $this->buildPrimaryAddCandidateForPort($view, $runtime, $chaos, $newPort);
+    }
+
+    private function buildPrimaryAddCandidateForPort(
+        ChaosClusterView $view,
+        ChaosRuntimeState $runtime,
+        ChaosOptions $chaos,
+        int $newPort,
+    ): ?ChaosCandidateEvent {
+        $plan = $this->primaryAddPlanner->plan($view, $newPort, $chaos->slotMigrationBatch);
+        if (!$plan instanceof PrimaryAddPlan) {
+            return null;
+        }
+
+        $score = 2;
+        $reasons = [sprintf(
+            'primary %d owns the most slots and can seed a new shard with %d of them',
+            $plan->donorPort,
+            $plan->slotCount(),
+        )];
+
+        if ($runtime->mostRecentMatching(ChaosOptions::CATEGORY_PRIMARY_REMOVE) instanceof ChaosEventRecord) {
+            $score += 2;
+            $reasons[] = 'restores primary inventory that chaos removed earlier';
+        }
+
+        $lastEvent = $runtime->history[count($runtime->history) - 1] ?? null;
+        if ($lastEvent instanceof ChaosEventRecord && $lastEvent->category === ChaosOptions::CATEGORY_PRIMARY_ADD) {
+            $score -= 3;
+            $reasons[] = 'the previous event already grew the cluster, so growing it again is deprioritized';
+        }
+
+        return new ChaosCandidateEvent(
+            category: ChaosOptions::CATEGORY_PRIMARY_ADD,
+            targetPort: $plan->newPrimaryPort,
+            targetPrimaryPort: $plan->donorPort,
+            score: $score,
+            summary: $plan->summary(),
+            postcondition: $plan->postcondition(),
+            reasons: $reasons,
+            primaryAddPlan: $plan,
+        );
+    }
+
+    /**
+     * Shrinking is the same event in reverse, and it is deliberately ordered:
+     * replicas move first so nothing is stranded, then every slot is drained so
+     * the keyspace stays covered, and only a node that owns nothing is
+     * forgotten and stopped.
+     *
+     * @return list<ChaosCandidateEvent>
+     */
+    private function buildPrimaryRemoveCandidates(
+        ChaosClusterView $view,
+        ChaosRuntimeState $runtime,
+        ChaosOptions $chaos,
+    ): array {
+        if ($this->primaryMembershipEligibility->blockers($view, $chaos->unsafe) !== []) {
+            return [];
+        }
+
+        $candidates = [];
+        foreach ($this->primaryRemovePlanner->candidates($view, $view->seedPort) as $plan) {
+            $score = 2;
+            $reasons = [sprintf(
+                'primary %d can hand %d slot%s and %d replica%s to the remaining primaries',
+                $plan->port,
+                $plan->slotCount(),
+                $plan->slotCount() === 1 ? '' : 's',
+                count($plan->replicaPorts),
+                count($plan->replicaPorts) === 1 ? '' : 's',
+            )];
+
+            if ($this->wasAddedByChaos($runtime, $plan->port)) {
+                $score += 2;
+                $reasons[] = 'completes the add and remove cycle for a primary chaos created';
+            }
+
+            if ($plan->slotCount() <= $chaos->slotMigrationBatch) {
+                $score += 1;
+                $reasons[] = sprintf('draining it moves at most %d slots', $chaos->slotMigrationBatch);
+            }
+
+            if ($runtime->lastEventTargeted(ChaosOptions::CATEGORY_PRIMARY_ADD, $plan->port)) {
+                // Let clients discover the new shard before taking it away.
+                $score -= 3;
+                $reasons[] = 'the previous event created this primary, so removing it now is deprioritized';
+            }
+
+            $candidates[] = new ChaosCandidateEvent(
+                category: ChaosOptions::CATEGORY_PRIMARY_REMOVE,
+                targetPort: $plan->port,
+                targetPrimaryPort: $plan->replicaRecipientPort,
+                score: $score,
+                summary: $plan->summary(),
+                postcondition: $plan->postcondition(),
+                reasons: $reasons,
+                primaryRemovePlan: $plan,
+            );
+        }
+
+        return $candidates;
+    }
+
+    private function wasAddedByChaos(ChaosRuntimeState $runtime, int $port): bool
+    {
+        foreach ($runtime->history as $event) {
+            $plan = $event->primaryAddPlan;
+            if ($event->status === 'completed'
+                && $plan instanceof PrimaryAddPlan
+                && $plan->newPrimaryPort === $port
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * @param array<string, mixed> $metadata
      */
     private function executeChaosEvent(
@@ -2281,9 +2539,204 @@ final class ClusterManager
                 $runtime->rememberReplicaPrimary($reparentPlan->replicaPort, $reparentPlan->targetPrimaryPort);
                 break;
 
+            case ChaosOptions::CATEGORY_PRIMARY_ADD:
+                $addPlan = $event->primaryAddPlan;
+                if (!$addPlan instanceof PrimaryAddPlan) {
+                    throw new RuntimeException('primary-add is missing an add plan.');
+                }
+
+                $this->executePrimaryAdd($addPlan, $view, $options, $metadata, $tls, $caCert);
+                break;
+
+            case ChaosOptions::CATEGORY_PRIMARY_REMOVE:
+                $removePlan = $event->primaryRemovePlan;
+                if (!$removePlan instanceof PrimaryRemovePlan) {
+                    throw new RuntimeException('primary-remove is missing a remove plan.');
+                }
+
+                $this->executePrimaryRemove($removePlan, $view, $runtime, $metadata, $tls, $caCert);
+                break;
+
             default:
                 throw new RuntimeException(sprintf('Unsupported chaos event category: %s', $event->category));
         }
+    }
+
+    /**
+     * Join an empty managed primary, then migrate the planned slots into it.
+     * The new node's ID only exists after it starts, so the migration plan is
+     * completed here rather than when the event was chosen.
+     *
+     * @param array<string, mixed> $metadata
+     */
+    private function executePrimaryAdd(
+        PrimaryAddPlan $plan,
+        ChaosClusterView $view,
+        CommandLineOptions $options,
+        array $metadata,
+        bool $tls,
+        ?string $caCert,
+    ): void {
+        $shards = $this->clusterShardsParser->parse($this->readClusterShardsWithFallback($view->seedPort, $tls, $caCert));
+        $donorNode = $this->findPrimaryNodeByPort($shards, $plan->donorPort);
+        if (!$donorNode instanceof ClusterNodeStatus) {
+            throw new RuntimeException(sprintf('Unable to resolve donor primary %d for primary-add.', $plan->donorPort));
+        }
+
+        [, , $tlsMaterial] = $this->resolveSeedConnectionContext($view->seedPort, $metadata);
+
+        $this->output->step(sprintf('Adding primary %d to the cluster', $plan->newPrimaryPort));
+        $newNodeId = $this->createPrimaryNode(
+            options: $options,
+            metadata: $metadata,
+            meetNode: $donorNode,
+            port: $plan->newPrimaryPort,
+            tls: $tls,
+            caCert: $caCert,
+            tlsMaterial: $tlsMaterial,
+            usedPorts: $this->extractClusterPorts($shards),
+        );
+
+        $migration = new SlotMigrationPlan(
+            sourcePort: $plan->donorPort,
+            sourceNodeId: $donorNode->id,
+            destinationPort: $plan->newPrimaryPort,
+            destinationNodeId: $newNodeId,
+            ranges: $plan->ranges,
+        );
+
+        $notifyPorts = [...$this->reachablePrimaryPorts($view), $plan->newPrimaryPort];
+        $this->slotMigrator->migrate(
+            plan: $migration,
+            destinationHost: $this->resolveNodeHostByPort($view->seedPort, $plan->newPrimaryPort, $tls, $caCert),
+            notifyPorts: array_values(array_unique($notifyPorts)),
+            tls: $tls,
+            caCert: $caCert,
+        );
+    }
+
+    /**
+     * Reattach the victim's replicas, drain every slot it owns, have the
+     * remaining nodes forget it, and only then stop the process. Each step is
+     * ordered so the cluster never has to serve a slot that nobody owns and no
+     * replica is left following a node that is about to disappear.
+     *
+     * @param array<string, mixed> $metadata
+     */
+    private function executePrimaryRemove(
+        PrimaryRemovePlan $plan,
+        ChaosClusterView $view,
+        ChaosRuntimeState $runtime,
+        array $metadata,
+        bool $tls,
+        ?string $caCert,
+    ): void {
+        foreach ($plan->replicaPorts as $replicaPort) {
+            if ($plan->replicaRecipientPort === null) {
+                throw new RuntimeException(sprintf('primary-remove has no recipient for replica %d.', $replicaPort));
+            }
+
+            $this->output->step(sprintf(
+                'Moving replica %d to primary %d before removing primary %d',
+                $replicaPort,
+                $plan->replicaRecipientPort,
+                $plan->port,
+            ));
+            $this->redisNodeClient->clusterReplicate($replicaPort, $tls, $caCert, $plan->replicaRecipientNodeId);
+            $this->waitForReplicaAttachment($view->seedPort, $plan->replicaRecipientPort, $replicaPort, $tls, $caCert);
+            $runtime->rememberReplicaPrimary($replicaPort, $plan->replicaRecipientPort);
+        }
+
+        $notifyPorts = $this->reachablePrimaryPorts($view);
+        foreach ($plan->drainPlans as $drainPlan) {
+            $this->slotMigrator->migrate(
+                plan: $drainPlan,
+                destinationHost: $this->resolveNodeHostByPort($view->seedPort, $drainPlan->destinationPort, $tls, $caCert),
+                notifyPorts: $notifyPorts,
+                tls: $tls,
+                caCert: $caCert,
+            );
+        }
+
+        $this->output->step(sprintf('Forgetting primary %d across the remaining nodes', $plan->port));
+        $this->forgetClusterNodeEverywhere($view, $plan->port, $plan->nodeId, $tls, $caCert);
+
+        $this->output->step(sprintf('Stopping removed primary %d', $plan->port));
+        $this->redisNodeClient->shutdown($plan->port, $tls, $caCert);
+        $this->systemInspector->waitForPortsToClose([$plan->port]);
+        $this->persistClusterMetadataPortRemoval($metadata, $plan->port);
+    }
+
+    /**
+     * Tell every remaining reachable node to drop the removed node instead of
+     * relying on gossip, so the removal is observable from all of them.
+     */
+    private function forgetClusterNodeEverywhere(
+        ChaosClusterView $view,
+        int $removedPort,
+        string $nodeId,
+        bool $tls,
+        ?string $caCert,
+    ): void {
+        foreach ($view->nodeStateByPort as $port => $node) {
+            if ($port === $removedPort || !$node->knownByCluster || !$node->reachable) {
+                continue;
+            }
+
+            if (!$this->redisNodeClient->knowsClusterNode($port, $tls, $caCert, $nodeId)) {
+                continue;
+            }
+
+            try {
+                $this->redisNodeClient->clusterForget($port, $tls, $caCert, $nodeId);
+            } catch (\Throwable $exception) {
+                // Redis 7.2+ propagates the ban through gossip, so a node can
+                // drop the ID between the check and the command. Only a node
+                // that still knows it is a real failure.
+                if ($this->redisNodeClient->knowsClusterNode($port, $tls, $caCert, $nodeId)) {
+                    throw $exception;
+                }
+            }
+        }
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function reachablePrimaryPorts(ChaosClusterView $view): array
+    {
+        $ports = [];
+        foreach ($view->primaryStateByPort as $port => $primary) {
+            if ($primary->reachable) {
+                $ports[] = $port;
+            }
+        }
+
+        return $ports;
+    }
+
+    /**
+     * MIGRATE needs the destination's advertised host. A node that has only
+     * just joined may not be in the seed's shard view yet, in which case the
+     * managed clusters this command creates are always local.
+     */
+    private function resolveNodeHostByPort(int $seedPort, int $port, bool $tls, ?string $caCert): string
+    {
+        try {
+            $shards = $this->clusterShardsParser->parse($this->readClusterShardsWithFallback($seedPort, $tls, $caCert));
+        } catch (\Throwable) {
+            return '127.0.0.1';
+        }
+
+        foreach ($shards as $shard) {
+            foreach ([$shard->master, ...$shard->replicas] as $node) {
+                if ($node->port === $port) {
+                    return $this->resolveNodeHost($node);
+                }
+            }
+        }
+
+        return '127.0.0.1';
     }
 
     /**
@@ -2347,6 +2800,8 @@ final class ClusterManager
             ChaosOptions::CATEGORY_SLOT_MIGRATION => $this->isSlotMigrationSatisfied($event, $view),
             ChaosOptions::CATEGORY_PRIMARY_FAILOVER => $this->isPrimaryFailoverSatisfied($event, $view),
             ChaosOptions::CATEGORY_REPLICA_REPARENT => $this->isReplicaReparentSatisfied($event, $view),
+            ChaosOptions::CATEGORY_PRIMARY_ADD => $this->isPrimaryAddSatisfied($event, $view),
+            ChaosOptions::CATEGORY_PRIMARY_REMOVE => $this->isPrimaryRemoveSatisfied($event, $view),
             default => false,
         };
     }
@@ -2456,6 +2911,80 @@ final class ClusterManager
         return !$source instanceof ChaosPrimaryState || !in_array($plan->replicaPort, $source->replicaPorts, true);
     }
 
+    /**
+     * The new primary counts as added once the cluster knows it as a primary
+     * and it serves every slot the donor handed over.
+     */
+    private function isPrimaryAddSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
+    {
+        $plan = $event->primaryAddPlan;
+        if (!$plan instanceof PrimaryAddPlan || $view->clusterDown) {
+            return false;
+        }
+
+        $node = $view->nodeStateByPort[$plan->newPrimaryPort] ?? null;
+        if (!$node instanceof ChaosNodeState || !$node->isSettledPrimary()) {
+            return false;
+        }
+
+        $added = $view->primaryStateByPort[$plan->newPrimaryPort] ?? null;
+        $donor = $view->primaryStateByPort[$plan->donorPort] ?? null;
+        if (!$added instanceof ChaosPrimaryState || !$donor instanceof ChaosPrimaryState || !$donor->reachable) {
+            return false;
+        }
+
+        foreach ($plan->slots() as $slot) {
+            if (!$added->ownsSlot($slot) || $donor->ownsSlot($slot)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Removal is only done when the node is gone from the cluster and from the
+     * host, its slots are served by the planned destinations, and nothing still
+     * follows it as a replica.
+     */
+    private function isPrimaryRemoveSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
+    {
+        $plan = $event->primaryRemovePlan;
+        if (!$plan instanceof PrimaryRemovePlan || $view->clusterDown) {
+            return false;
+        }
+
+        $removed = $view->nodeStateByPort[$plan->port] ?? null;
+        if ($removed instanceof ChaosNodeState && ($removed->knownByCluster || $removed->reachable)) {
+            return false;
+        }
+
+        if (isset($view->primaryStateByPort[$plan->port])) {
+            return false;
+        }
+
+        foreach ($view->nodeStateByPort as $node) {
+            if ($node->primaryPort === $plan->port) {
+                return false;
+            }
+        }
+
+        foreach ($plan->drainPlans as $drainPlan) {
+            $destination = $view->primaryStateByPort[$drainPlan->destinationPort] ?? null;
+            if (!$destination instanceof ChaosPrimaryState || !$destination->reachable) {
+                return false;
+            }
+
+            foreach ($drainPlan->slots() as $slot) {
+                if (!$destination->ownsSlot($slot)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
     private function isReplicaKillSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
     {
         $primaryPort = $event->targetPrimaryPort;
@@ -2531,6 +3060,25 @@ final class ClusterManager
             $lines[] = sprintf('replica-reparent blocked: %s', implode('; ', $blockers));
         }
 
+        $membershipCategories = array_values(array_intersect(
+            [ChaosOptions::CATEGORY_PRIMARY_ADD, ChaosOptions::CATEGORY_PRIMARY_REMOVE],
+            $chaos->categories,
+        ));
+        if ($membershipCategories !== []) {
+            $blockers = $this->primaryMembershipEligibility->blockers($view, $chaos->unsafe);
+            if ($blockers === [] && in_array(ChaosOptions::CATEGORY_PRIMARY_ADD, $membershipCategories, true)
+                && count($view->primaryStateByPort) >= self::CHAOS_PRIMARY_CAP
+            ) {
+                $blockers[] = sprintf('primary count is capped at %d', self::CHAOS_PRIMARY_CAP);
+            }
+
+            if ($blockers === []) {
+                $blockers[] = 'no primary can be seeded or drained right now';
+            }
+
+            $lines[] = sprintf('%s blocked: %s', implode('/', $membershipCategories), implode('; ', $blockers));
+        }
+
         if ($lines === []) {
             return '[wait ] no eligible events';
         }
@@ -2553,6 +3101,16 @@ final class ClusterManager
         $reparentPlan = $event->replicaReparentPlan;
         if ($event->category === ChaosOptions::CATEGORY_REPLICA_REPARENT && $reparentPlan instanceof ReplicaReparentPlan) {
             return $this->formatReplicaReparentWaitLine($event->id, $reparentPlan, $view);
+        }
+
+        $addPlan = $event->primaryAddPlan;
+        if ($event->category === ChaosOptions::CATEGORY_PRIMARY_ADD && $addPlan instanceof PrimaryAddPlan) {
+            return $this->formatPrimaryAddWaitLine($event->id, $addPlan, $view);
+        }
+
+        $removePlan = $event->primaryRemovePlan;
+        if ($event->category === ChaosOptions::CATEGORY_PRIMARY_REMOVE && $removePlan instanceof PrimaryRemovePlan) {
+            return $this->formatPrimaryRemoveWaitLine($event->id, $removePlan, $view);
         }
 
         $target = $event->targetPort !== null ? ($view->nodeStateByPort[$event->targetPort] ?? null) : null;
@@ -2608,6 +3166,62 @@ final class ClusterManager
             $source instanceof ChaosPrimaryState && in_array($plan->replicaPort, $source->replicaPorts, true) ? '1' : '0',
             $plan->targetPrimaryPort,
             $target instanceof ChaosPrimaryState && in_array($plan->replicaPort, $target->replicaPorts, true) ? '1' : '0',
+            $view->clusterDown ? 'down' : 'ok',
+        );
+    }
+
+    private function formatPrimaryAddWaitLine(int $eventId, PrimaryAddPlan $plan, ChaosClusterView $view): string
+    {
+        $node = $view->nodeStateByPort[$plan->newPrimaryPort] ?? null;
+        $added = $view->primaryStateByPort[$plan->newPrimaryPort] ?? null;
+        $owned = 0;
+        foreach ($plan->slots() as $slot) {
+            if ($added instanceof ChaosPrimaryState && $added->ownsSlot($slot)) {
+                $owned++;
+            }
+        }
+
+        return sprintf(
+            '[wait ] event#%d primary=%d known=%s role=%s owned=%d/%d donor=%d cluster=%s',
+            $eventId,
+            $plan->newPrimaryPort,
+            $node instanceof ChaosNodeState && $node->knownByCluster ? '1' : '0',
+            $node instanceof ChaosNodeState ? $node->role : 'unknown',
+            $owned,
+            $plan->slotCount(),
+            $plan->donorPort,
+            $view->clusterDown ? 'down' : 'ok',
+        );
+    }
+
+    private function formatPrimaryRemoveWaitLine(int $eventId, PrimaryRemovePlan $plan, ChaosClusterView $view): string
+    {
+        $node = $view->nodeStateByPort[$plan->port] ?? null;
+        $drained = 0;
+        foreach ($plan->drainPlans as $drainPlan) {
+            $destination = $view->primaryStateByPort[$drainPlan->destinationPort] ?? null;
+            foreach ($drainPlan->slots() as $slot) {
+                if ($destination instanceof ChaosPrimaryState && $destination->ownsSlot($slot)) {
+                    $drained++;
+                }
+            }
+        }
+
+        $followers = 0;
+        foreach ($view->nodeStateByPort as $candidate) {
+            if ($candidate->primaryPort === $plan->port) {
+                $followers++;
+            }
+        }
+
+        return sprintf(
+            '[wait ] event#%d primary=%d known=%s drained=%d/%d followers=%d cluster=%s',
+            $eventId,
+            $plan->port,
+            $node instanceof ChaosNodeState && $node->knownByCluster ? '1' : '0',
+            $drained,
+            $plan->slotCount(),
+            $followers,
             $view->clusterDown ? 'down' : 'ok',
         );
     }
@@ -2751,6 +3365,17 @@ final class ClusterManager
 
     /**
      * @param array<string, mixed> $metadata
+     * @return array<string, mixed>
+     */
+    private function refreshChaosMetadata(array $metadata, int $seedPort): array
+    {
+        $reloaded = $this->stateStore->findClusterByPort($seedPort);
+
+        return is_array($reloaded) ? $reloaded : $metadata;
+    }
+
+    /**
+     * @param array<string, mixed> $metadata
      * @return list<int>
      */
     private function readManagedPorts(array $metadata): array
@@ -2775,7 +3400,7 @@ final class ClusterManager
         return $normalized;
     }
 
-    private function selectChaosReplicaPort(ChaosClusterView $view): ?int
+    private function selectChaosNodePort(ChaosClusterView $view): ?int
     {
         $usedPorts = array_map('intval', array_keys($view->nodeStateByPort));
         if ($usedPorts === []) {

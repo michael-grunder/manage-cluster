@@ -12,12 +12,14 @@ final readonly class SlotMigrationPlan
      * @param list<SlotRange> $ranges
      */
     public function __construct(
-        public SlotMigrationStrategy $strategy,
         public int $sourcePort,
         public string $sourceNodeId,
         public int $destinationPort,
         public string $destinationNodeId,
         public array $ranges,
+        // Chaos slot-migration events pick a strategy; the migrations that
+        // drain or seed a primary are directed by their own event instead.
+        public ?SlotMigrationStrategy $strategy = null,
     ) {
         if ($ranges === []) {
             throw new InvalidArgumentException('A slot migration plan must move at least one slot.');
@@ -49,12 +51,12 @@ final readonly class SlotMigrationPlan
     public function summary(): string
     {
         return sprintf(
-            'slot-migration slots=%s (%d) source=%d destination=%d strategy=%s',
+            'slot-migration slots=%s (%d) source=%d destination=%d%s',
             $this->describeRanges(),
             $this->slotCount(),
             $this->sourcePort,
             $this->destinationPort,
-            $this->strategy->value,
+            $this->strategy instanceof SlotMigrationStrategy ? sprintf(' strategy=%s', $this->strategy->value) : '',
         );
     }
 

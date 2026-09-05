@@ -20,6 +20,8 @@ final readonly class ChaosCandidateEvent
         public ?SlotMigrationPlan $slotMigrationPlan = null,
         public ?PrimaryFailoverPlan $primaryFailoverPlan = null,
         public ?ReplicaReparentPlan $replicaReparentPlan = null,
+        public ?PrimaryAddPlan $primaryAddPlan = null,
+        public ?PrimaryRemovePlan $primaryRemovePlan = null,
     ) {
     }
 }

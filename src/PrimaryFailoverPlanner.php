@@ -86,14 +86,7 @@ final readonly class PrimaryFailoverPlanner
 
     private function isDemotablePrimary(ChaosNodeState $primary): bool
     {
-        return $primary->role === 'primary'
-            && $primary->managed
-            && $primary->knownByCluster
-            && $primary->reachable
-            && !$primary->isFailed
-            && !$primary->isHandshake
-            && !$primary->isLoading
-            && !$primary->failoverInProgress;
+        return $primary->managed && $primary->isSettledPrimary();
     }
 
     /**

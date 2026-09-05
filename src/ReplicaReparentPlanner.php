@@ -76,12 +76,6 @@ final readonly class ReplicaReparentPlanner
 
         $node = $view->nodeStateByPort[$target->port] ?? null;
 
-        return $node instanceof ChaosNodeState
-            && $node->role === 'primary'
-            && $node->knownByCluster
-            && !$node->isFailed
-            && !$node->isHandshake
-            && !$node->isLoading
-            && !$node->failoverInProgress;
+        return $node instanceof ChaosNodeState && $node->isSettledPrimary();
     }
 }

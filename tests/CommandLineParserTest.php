@@ -1006,6 +1006,64 @@ final class CommandLineParserTest extends TestCase
         $parser->parse(['bin/manage-cluster', 'status', '7000', '--allow-replica-reparent']);
     }
 
+    public function testAllowPrimaryAddAndRemoveAddTheCategoriesToTheDefaults(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse([
+            'bin/manage-cluster',
+            'chaos',
+            '7000',
+            '--allow-primary-add',
+            '--allow-primary-remove',
+        ]);
+
+        self::assertNotNull($options->chaos);
+        self::assertTrue($options->chaos->allowPrimaryAdd);
+        self::assertTrue($options->chaos->allowPrimaryRemove);
+        self::assertSame(
+            ['replica-kill', 'replica-restart', 'replica-add', 'primary-add', 'primary-remove'],
+            $options->chaos->categories,
+        );
+    }
+
+    public function testAllowPrimaryAddDoesNotDuplicateAnExplicitCategory(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse([
+            'bin/manage-cluster',
+            'chaos',
+            '7000',
+            '--categories',
+            'primary-add,primary-remove',
+            '--allow-primary-add',
+        ]);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame(['primary-add', 'primary-remove'], $options->chaos->categories);
+    }
+
+    public function testAllowPrimaryAddRequiresChaos(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--allow-primary-add can only be used with chaos.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--allow-primary-add']);
+    }
+
+    public function testAllowPrimaryRemoveRequiresChaos(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--allow-primary-remove can only be used with chaos.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--allow-primary-remove']);
+    }
+
     public function testChaosRejectsUnknownSlotStrategy(): void
     {
         $parser = new CommandLineParser();

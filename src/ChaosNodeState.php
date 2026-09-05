@@ -50,6 +50,21 @@ final readonly class ChaosNodeState
             && $this->linkStatus === 'up';
     }
 
+    /**
+     * A primary that is present, answering, and not in the middle of a role or
+     * membership change, so events may treat its shard as settled.
+     */
+    public function isSettledPrimary(): bool
+    {
+        return $this->role === 'primary'
+            && $this->knownByCluster
+            && $this->reachable
+            && !$this->isFailed
+            && !$this->isHandshake
+            && !$this->isLoading
+            && !$this->failoverInProgress;
+    }
+
     public function isHealthyReplica(): bool
     {
         return $this->role === 'replica'

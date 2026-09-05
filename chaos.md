@@ -43,6 +43,7 @@ chosen based on:
 `bin/manage-cluster chaos 7000 --categories slot-migration --slot-strategy random`
 `bin/manage-cluster chaos 7000 --allow-primary-failover`
 `bin/manage-cluster chaos 7000 --allow-replica-reparent`
+`bin/manage-cluster chaos 7000 --allow-primary-add --allow-primary-remove`
 
 ### Options
 - `--categories LIST`
@@ -54,6 +55,8 @@ chosen based on:
   - `replica-remove`
   - `replica-add`
   - `replica-reparent`
+  - `primary-add`
+  - `primary-remove`
   - `slot-migration`
   - `primary-failover`
 
@@ -70,6 +73,9 @@ chosen based on:
     `--allow-primary-failover`.
   - `replica-reparent` is implemented and stays out of the default set; enable
     it here or with `--allow-replica-reparent`.
+  - `primary-add` and `primary-remove` are implemented as multi-step events and
+    stay out of the default set; enable them here or with
+    `--allow-primary-add` / `--allow-primary-remove`.
 
 - `--interval SECONDS`
   Minimum time between completed chaos steps.
@@ -113,6 +119,10 @@ chosen based on:
 - `--allow-replica-reparent`
   Explicit opt-in that adds `replica-reparent` to the allowed categories, so
   the other replica categories do not have to be restated in `--categories`.
+
+- `--allow-primary-add`, `--allow-primary-remove`
+  Explicit opt-ins that add the primary membership categories to the allowed
+  categories.
 
 - `--slot-strategy balanced|random`
   How a slot-migration event chooses its source, destination, and slots.
@@ -641,6 +651,94 @@ get exercised over a run.
 
 ---
 
+## 8. `primary-add`
+
+### Purpose
+Grow the cluster by one shard so clients see a primary appear and then start
+owning part of the keyspace. This is deliberately two steps in one event: the
+node exists before it serves anything.
+
+### Status
+Implemented. Off by default; enabled with `--allow-primary-add` or by naming
+`primary-add` in `--categories`.
+
+### Candidate eligibility
+A primary may be added only if:
+- at least three reachable primaries own slots
+- the cluster holds fewer than the primary cap (6)
+- a free port outside the current cluster range is available
+- some settled primary owns at least two slots and can donate half of what it
+  owns, capped by `--slot-batch`
+- no inflight mutation exists
+- the user enabled the category explicitly
+
+Without `--unsafe` the cluster must also have settled membership: no unreachable
+or failed primary, no handshaking node, and no down replica.
+
+### Execution
+- write a node configuration in the cluster's own directory and start it
+- `CLUSTER MEET` an existing primary and wait for gossip both ways
+- read the new node's ID with `CLUSTER MYID` and record the port in cluster
+  metadata
+- migrate the planned slots from the donor with the normal
+  `CLUSTER SETSLOT` plus `MIGRATE` handshake
+
+A failure while starting or joining stops the new process again, so a failed
+event does not leave a half-joined node behind.
+
+### Postcondition
+Wait for:
+- the new port known by the cluster as a settled primary
+- the new primary owning every donated slot, and the donor owning none of them
+- cluster not reporting `CLUSTERDOWN`
+
+---
+
+## 9. `primary-remove`
+
+### Purpose
+Shrink the cluster by one shard without ever leaving a slot unserved. Clients
+must drop a primary they know about and follow its keyspace to the primaries
+that absorbed it.
+
+### Status
+Implemented. Off by default; enabled with `--allow-primary-remove` or by naming
+`primary-remove` in `--categories`.
+
+### Candidate eligibility
+A primary may be removed only if:
+- it is managed, settled, and is not the seed port the runner discovers through
+- at least three slot-owning primaries remain after the drain
+- every replica attached to it is healthy enough to be reattached first
+- no inflight mutation exists
+- the user enabled the category explicitly
+
+The same settled-membership rule as `primary-add` applies without `--unsafe`.
+
+### Execution
+Ordered so the cluster is never asked to serve a slot nobody owns:
+1. `CLUSTER REPLICATE` each attached replica onto the surviving primary that
+   receives the largest share, and wait for the attachment
+2. drain every slot in contiguous chunks to the remaining primaries
+3. `CLUSTER FORGET` the node ID from every remaining reachable node
+4. shut the process down and drop the port from cluster metadata
+
+### Postcondition
+Wait for:
+- the removed port absent from the cluster and no longer reachable
+- every drained slot owned by its planned destination
+- no node still reporting the removed port as its primary
+- cluster not reporting `CLUSTERDOWN`
+
+### Notes
+The drain reuses the one-slot-at-a-time migration path, so removing a primary
+that owns a large share of the keyspace is a long event. Scoring prefers victims
+whose drain fits inside `--slot-batch`, and prefers finishing the cycle for a
+primary that `primary-add` created, but never removes one the immediately
+preceding event added.
+
+---
+
 ## Event selection policy
 
 Each loop must:
@@ -665,6 +763,8 @@ Example scoring ideas:
 - +2 kill a healthy replica on a currently stable primary
 - +2 promote a primary that an earlier failover demoted
 - +3 reparent a replica onto a primary with zero healthy replicas
+- +2 remove a primary that an earlier primary-add created
+- -3 remove a primary the previous event created
 - -3 move a replica the previous event already moved
 - -3 fail a shard back immediately after promoting it
 - -5 any event that would create a second degraded primary

@@ -14,7 +14,13 @@ use Mgrunder\CreateCluster\ChaosRuntimeState;
 use Mgrunder\CreateCluster\ClusterManager;
 use Mgrunder\CreateCluster\ClusterNodeStatus;
 use Mgrunder\CreateCluster\ClusterShardStatus;
+use Mgrunder\CreateCluster\PrimaryAddPlan;
+use Mgrunder\CreateCluster\PrimaryAddPlanner;
 use Mgrunder\CreateCluster\PrimaryFailoverEligibility;
+use Mgrunder\CreateCluster\PrimaryMembershipEligibility;
+use Mgrunder\CreateCluster\PrimaryRemovePlan;
+use Mgrunder\CreateCluster\PrimaryRemovePlanner;
+use Mgrunder\CreateCluster\SlotMigrationPlan;
 use Mgrunder\CreateCluster\PrimaryFailoverPlan;
 use Mgrunder\CreateCluster\PrimaryFailoverPlanner;
 use Mgrunder\CreateCluster\ReplicaReparentEligibility;
@@ -568,6 +574,8 @@ MESSAGE);
             allowSlotMigration: false,
             allowPrimaryFailover: true,
             allowReplicaReparent: false,
+            allowPrimaryAdd: false,
+            allowPrimaryRemove: false,
             unsafe: false,
         );
     }
@@ -1007,6 +1015,390 @@ MESSAGE);
                     linkStatus: $linkStatus,
                 ),
             ],
+            primaryStateByPort: $primaryStateByPort,
+            replicaStateByPort: [],
+            degradedPrimaryPorts: [],
+        );
+    }
+
+
+    public function testPrimaryAddConvergesWhenTheNewPortServesTheDonatedSlots(): void
+    {
+        $view = $this->membershipView([
+            7000 => ['range' => new SlotRange(0, 5461), 'replicas' => [7003]],
+            7001 => ['range' => new SlotRange(5462, 10922), 'replicas' => [7004]],
+            7002 => ['range' => new SlotRange(10923, 16367), 'replicas' => [7005]],
+            7010 => ['range' => new SlotRange(16368, 16383), 'replicas' => []],
+        ]);
+
+        self::assertTrue($this->invokeIsPrimaryAddSatisfied($this->primaryAddEvent(), $view));
+    }
+
+    /**
+     * @param array<int, array{range: SlotRange|null, replicas: list<int>}> $shards
+     */
+    #[DataProvider('unfinishedPrimaryAddProvider')]
+    public function testPrimaryAddIsUnfinishedUntilOwnershipMoves(array $shards, bool $clusterDown = false): void
+    {
+        $view = $this->membershipView($shards, clusterDown: $clusterDown);
+
+        self::assertFalse($this->invokeIsPrimaryAddSatisfied($this->primaryAddEvent(), $view));
+    }
+
+    /**
+     * @return iterable<string, array{shards: array<int, array{range: SlotRange|null, replicas: list<int>}>, clusterDown?: bool}>
+     */
+    public static function unfinishedPrimaryAddProvider(): iterable
+    {
+        yield 'new primary has not joined yet' => ['shards' => [
+            7000 => ['range' => new SlotRange(0, 5461), 'replicas' => [7003]],
+            7001 => ['range' => new SlotRange(5462, 10922), 'replicas' => [7004]],
+            7002 => ['range' => new SlotRange(10923, 16383), 'replicas' => [7005]],
+        ]];
+
+        yield 'new primary joined but owns nothing' => ['shards' => [
+            7000 => ['range' => new SlotRange(0, 5461), 'replicas' => [7003]],
+            7001 => ['range' => new SlotRange(5462, 10922), 'replicas' => [7004]],
+            7002 => ['range' => new SlotRange(10923, 16383), 'replicas' => [7005]],
+            7010 => ['range' => null, 'replicas' => []],
+        ]];
+
+        yield 'donor still owns part of the range' => ['shards' => [
+            7000 => ['range' => new SlotRange(0, 5461), 'replicas' => [7003]],
+            7001 => ['range' => new SlotRange(5462, 10922), 'replicas' => [7004]],
+            7002 => ['range' => new SlotRange(10923, 16375), 'replicas' => [7005]],
+            7010 => ['range' => new SlotRange(16376, 16383), 'replicas' => []],
+        ]];
+
+        yield 'cluster is down' => [
+            'shards' => [
+                7000 => ['range' => new SlotRange(0, 5461), 'replicas' => [7003]],
+                7001 => ['range' => new SlotRange(5462, 10922), 'replicas' => [7004]],
+                7002 => ['range' => new SlotRange(10923, 16367), 'replicas' => [7005]],
+                7010 => ['range' => new SlotRange(16368, 16383), 'replicas' => []],
+            ],
+            'clusterDown' => true,
+        ];
+    }
+
+    public function testPrimaryRemoveConvergesWhenTheNodeIsGoneAndItsSlotsAreServed(): void
+    {
+        $view = $this->membershipView([
+            7000 => ['range' => new SlotRange(0, 5461), 'replicas' => [7003, 7013]],
+            7001 => ['range' => new SlotRange(5462, 10922), 'replicas' => [7004]],
+            7002 => ['range' => new SlotRange(10923, 16383), 'replicas' => [7005]],
+        ]);
+
+        self::assertTrue($this->invokeIsPrimaryRemoveSatisfied($this->primaryRemoveEvent(), $view));
+    }
+
+    /**
+     * @param array<int, array{range: SlotRange|null, replicas: list<int>, orphan?: bool}> $shards
+     */
+    #[DataProvider('unfinishedPrimaryRemoveProvider')]
+    public function testPrimaryRemoveIsUnfinishedWhileAnyTraceRemains(array $shards, bool $clusterDown = false): void
+    {
+        $view = $this->membershipView($shards, clusterDown: $clusterDown);
+
+        self::assertFalse($this->invokeIsPrimaryRemoveSatisfied($this->primaryRemoveEvent(), $view));
+    }
+
+    /**
+     * @return iterable<string, array{shards: array<int, array{range: SlotRange|null, replicas: list<int>, orphan?: bool}>, clusterDown?: bool}>
+     */
+    public static function unfinishedPrimaryRemoveProvider(): iterable
+    {
+        yield 'removed primary is still a primary' => ['shards' => [
+            7000 => ['range' => new SlotRange(0, 5461), 'replicas' => [7003]],
+            7001 => ['range' => new SlotRange(5462, 10922), 'replicas' => [7004]],
+            7002 => ['range' => new SlotRange(10923, 16367), 'replicas' => [7005]],
+            7010 => ['range' => new SlotRange(16368, 16383), 'replicas' => []],
+        ]];
+
+        yield 'drained slots are not served yet' => ['shards' => [
+            7000 => ['range' => new SlotRange(0, 5461), 'replicas' => [7003, 7013]],
+            7001 => ['range' => new SlotRange(5462, 10922), 'replicas' => [7004]],
+            7002 => ['range' => new SlotRange(10923, 16367), 'replicas' => [7005]],
+        ]];
+
+        yield 'a replica still follows the removed primary' => ['shards' => [
+            7000 => ['range' => new SlotRange(0, 5461), 'replicas' => [7003]],
+            7001 => ['range' => new SlotRange(5462, 10922), 'replicas' => [7004]],
+            7002 => ['range' => new SlotRange(10923, 16383), 'replicas' => [7005]],
+            7010 => ['range' => null, 'replicas' => [7013], 'orphan' => true],
+        ]];
+
+        yield 'cluster is down' => [
+            'shards' => [
+                7000 => ['range' => new SlotRange(0, 5461), 'replicas' => [7003, 7013]],
+                7001 => ['range' => new SlotRange(5462, 10922), 'replicas' => [7004]],
+                7002 => ['range' => new SlotRange(10923, 16383), 'replicas' => [7005]],
+            ],
+            'clusterDown' => true,
+        ];
+    }
+
+    public function testPrimaryAddScoresRestoringInventoryAndAvoidsGrowingTwice(): void
+    {
+        $view = $this->membershipView([
+            7000 => ['range' => new SlotRange(0, 5461), 'replicas' => [7003]],
+            7001 => ['range' => new SlotRange(5462, 10922), 'replicas' => [7004]],
+            7002 => ['range' => new SlotRange(10923, 16383), 'replicas' => [7005]],
+        ]);
+
+        $runtime = $this->chaosRuntime();
+        $candidate = $this->invokePrimaryAddCandidate($view, $runtime);
+
+        self::assertInstanceOf(ChaosCandidateEvent::class, $candidate);
+        self::assertSame(2, $candidate->score);
+        self::assertSame(7010, $candidate->targetPort);
+        // 7000 owns one slot more than the others, so it seeds the new shard.
+        self::assertSame(7000, $candidate->targetPrimaryPort);
+
+        $runtime->rememberHistory($this->membershipEvent(ChaosOptions::CATEGORY_PRIMARY_REMOVE, 7011));
+        $restoring = $this->invokePrimaryAddCandidate($view, $runtime);
+        self::assertInstanceOf(ChaosCandidateEvent::class, $restoring);
+        self::assertSame(4, $restoring->score);
+
+        $runtime->rememberHistory($this->membershipEvent(ChaosOptions::CATEGORY_PRIMARY_ADD, 7012));
+        $repeated = $this->invokePrimaryAddCandidate($view, $runtime);
+        self::assertInstanceOf(ChaosCandidateEvent::class, $repeated);
+        self::assertSame(1, $repeated->score);
+    }
+
+    public function testPrimaryAddIsNotOfferedWhileTheClusterBlocksMembershipChurn(): void
+    {
+        $view = $this->membershipView([
+            7000 => ['range' => new SlotRange(0, 8191), 'replicas' => [7003]],
+            7001 => ['range' => new SlotRange(8192, 16383), 'replicas' => [7004]],
+        ]);
+
+        self::assertNull($this->invokePrimaryAddCandidate($view, $this->chaosRuntime(), withPort: false));
+    }
+
+    public function testPrimaryRemovePrefersFinishingAnAddAndCheapDrains(): void
+    {
+        $view = $this->membershipView([
+            7000 => ['range' => new SlotRange(0, 5461), 'replicas' => [7003]],
+            7001 => ['range' => new SlotRange(5462, 10922), 'replicas' => [7004]],
+            7002 => ['range' => new SlotRange(10923, 16367), 'replicas' => [7005]],
+            7010 => ['range' => new SlotRange(16368, 16383), 'replicas' => []],
+        ]);
+
+        $runtime = $this->chaosRuntime();
+
+        // 7010 owns 16 slots, so its drain fits the batch; the others do not.
+        self::assertSame(
+            [7001 => 2, 7002 => 2, 7010 => 3],
+            $this->invokePrimaryRemoveCandidateScores($view, $runtime),
+        );
+
+        $runtime->rememberHistory($this->membershipEvent(ChaosOptions::CATEGORY_PRIMARY_ADD, 7010));
+        // The add is the previous event, so removing what it created waits.
+        self::assertSame(
+            [7001 => 2, 7002 => 2, 7010 => 2],
+            $this->invokePrimaryRemoveCandidateScores($view, $runtime),
+        );
+
+        $runtime->rememberHistory($this->membershipEvent(ChaosOptions::CATEGORY_SLOT_MIGRATION, 7001));
+        self::assertSame(
+            [7001 => 2, 7002 => 2, 7010 => 5],
+            $this->invokePrimaryRemoveCandidateScores($view, $runtime),
+        );
+    }
+
+    private function primaryAddEvent(): ChaosEventRecord
+    {
+        $plan = new PrimaryAddPlan(
+            newPrimaryPort: 7010,
+            donorPort: 7002,
+            donorNodeId: 'node-7002',
+            ranges: [new SlotRange(16368, 16383)],
+        );
+
+        return new ChaosEventRecord(
+            id: 1,
+            category: ChaosOptions::CATEGORY_PRIMARY_ADD,
+            status: 'waiting',
+            targetPort: $plan->newPrimaryPort,
+            targetPrimaryPort: $plan->donorPort,
+            startedAt: 0.0,
+            completedAt: null,
+            summary: $plan->summary(),
+            postcondition: $plan->postcondition(),
+            primaryAddPlan: $plan,
+        );
+    }
+
+    private function primaryRemoveEvent(): ChaosEventRecord
+    {
+        $plan = new PrimaryRemovePlan(
+            port: 7010,
+            nodeId: 'node-7010',
+            drainPlans: [
+                new SlotMigrationPlan(
+                    sourcePort: 7010,
+                    sourceNodeId: 'node-7010',
+                    destinationPort: 7002,
+                    destinationNodeId: 'node-7002',
+                    ranges: [new SlotRange(16368, 16383)],
+                ),
+            ],
+            replicaPorts: [7013],
+            replicaRecipientPort: 7000,
+            replicaRecipientNodeId: 'node-7000',
+        );
+
+        return new ChaosEventRecord(
+            id: 1,
+            category: ChaosOptions::CATEGORY_PRIMARY_REMOVE,
+            status: 'waiting',
+            targetPort: $plan->port,
+            targetPrimaryPort: $plan->replicaRecipientPort,
+            startedAt: 0.0,
+            completedAt: null,
+            summary: $plan->summary(),
+            postcondition: $plan->postcondition(),
+            primaryRemovePlan: $plan,
+        );
+    }
+
+    private function membershipEvent(string $category, int $port): ChaosEventRecord
+    {
+        $addPlan = $category === ChaosOptions::CATEGORY_PRIMARY_ADD
+            ? new PrimaryAddPlan(
+                newPrimaryPort: $port,
+                donorPort: 7002,
+                donorNodeId: 'node-7002',
+                ranges: [new SlotRange(16368, 16383)],
+            )
+            : null;
+
+        return new ChaosEventRecord(
+            id: count($this->chaosRuntime()->history) + 1,
+            category: $category,
+            status: 'completed',
+            targetPort: $port,
+            targetPrimaryPort: null,
+            startedAt: 0.0,
+            completedAt: 1.0,
+            summary: sprintf('%s target=%d', $category, $port),
+            postcondition: 'done',
+            primaryAddPlan: $addPlan,
+        );
+    }
+
+    private function invokeIsPrimaryAddSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
+    {
+        return $this->invokeChaosPostcondition('isPrimaryAddSatisfied', $event, $view);
+    }
+
+    private function invokeIsPrimaryRemoveSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
+    {
+        return $this->invokeChaosPostcondition('isPrimaryRemoveSatisfied', $event, $view);
+    }
+
+    private function invokeChaosPostcondition(string $method, ChaosEventRecord $event, ChaosClusterView $view): bool
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $satisfied = new ReflectionClass($manager)->getMethod($method)->invoke($manager, $event, $view);
+        self::assertIsBool($satisfied);
+
+        return $satisfied;
+    }
+
+    private function invokePrimaryAddCandidate(
+        ChaosClusterView $view,
+        ChaosRuntimeState $runtime,
+        bool $withPort = true,
+    ): ?ChaosCandidateEvent {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $reflection->getProperty('primaryMembershipEligibility')->setValue($manager, new PrimaryMembershipEligibility());
+        $reflection->getProperty('primaryAddPlanner')->setValue($manager, new PrimaryAddPlanner());
+
+        // Port selection needs a live host, so the scoring seam takes the port
+        // the outer builder would have picked.
+        $candidate = $withPort
+            ? $reflection->getMethod('buildPrimaryAddCandidateForPort')->invoke($manager, $view, $runtime, $this->chaosOptions(), 7010)
+            : $reflection->getMethod('buildPrimaryAddCandidate')->invoke($manager, $view, $runtime, $this->chaosOptions());
+
+        self::assertTrue($candidate === null || $candidate instanceof ChaosCandidateEvent);
+
+        return $candidate;
+    }
+
+    /**
+     * @return array<int, int> candidate score keyed by the primary chaos would remove
+     */
+    private function invokePrimaryRemoveCandidateScores(ChaosClusterView $view, ChaosRuntimeState $runtime): array
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $reflection->getProperty('primaryMembershipEligibility')->setValue($manager, new PrimaryMembershipEligibility());
+        $reflection->getProperty('primaryRemovePlanner')->setValue($manager, new PrimaryRemovePlanner());
+
+        $candidates = $reflection->getMethod('buildPrimaryRemoveCandidates')->invoke(
+            $manager,
+            $view,
+            $runtime,
+            $this->chaosOptions(),
+        );
+
+        self::assertIsArray($candidates);
+
+        $scores = [];
+        foreach ($candidates as $candidate) {
+            self::assertInstanceOf(ChaosCandidateEvent::class, $candidate);
+            self::assertNotNull($candidate->targetPort);
+            $scores[$candidate->targetPort] = $candidate->score;
+        }
+
+        return $scores;
+    }
+
+    /**
+     * @param array<int, array{range: SlotRange|null, replicas: list<int>, orphan?: bool}> $shards
+     */
+    private function membershipView(array $shards, bool $clusterDown = false): ChaosClusterView
+    {
+        $nodeStateByPort = [];
+        $primaryStateByPort = [];
+
+        foreach ($shards as $primaryPort => $shard) {
+            $ranges = $shard['range'] instanceof SlotRange ? [$shard['range']] : [];
+            $nodeStateByPort[$primaryPort] = $this->chaosNode($primaryPort, 'primary', slotRanges: $ranges);
+
+            foreach ($shard['replicas'] as $replicaPort) {
+                $nodeStateByPort[$replicaPort] = $this->chaosNode($replicaPort, 'replica', primaryPort: $primaryPort);
+            }
+
+            if ($shard['orphan'] ?? false) {
+                // A shard that only exists because a replica still points at it.
+                continue;
+            }
+
+            $primaryStateByPort[$primaryPort] = new ChaosPrimaryState(
+                port: $primaryPort,
+                nodeId: sprintf('node-%d', $primaryPort),
+                reachable: true,
+                slotRanges: $ranges,
+                replicaPorts: $shard['replicas'],
+                healthyReplicaCount: count($shard['replicas']),
+                syncingReplicaCount: 0,
+                failedReplicaCount: 0,
+            );
+        }
+
+        ksort($nodeStateByPort, SORT_NUMERIC);
+
+        return new ChaosClusterView(
+            clusterId: 'test-cluster',
+            seedPort: 7000,
+            topologyHash: 'hash',
+            clusterDown: $clusterDown,
+            broadlyHealthy: !$clusterDown,
+            nodeStateByPort: $nodeStateByPort,
             primaryStateByPort: $primaryStateByPort,
             replicaStateByPort: [],
             degradedPrimaryPorts: [],

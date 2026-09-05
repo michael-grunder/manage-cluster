@@ -270,6 +270,41 @@ final class RedisNodeClient
         $this->assertOkResponse($response, 'CLUSTER FAILOVER', $port);
     }
 
+    /**
+     * Drop a node from one observer's table. Redis 7.2+ gossips the ban, but
+     * chaos still tells every remaining node itself so removal is observable
+     * everywhere regardless of server version.
+     */
+    public function clusterForget(int $port, bool $tls, ?string $caCert, string $nodeId): void
+    {
+        $redis = $this->connectToNode($port, $tls, $caCert);
+
+        try {
+            $response = $redis->rawCommand('CLUSTER', 'FORGET', $nodeId);
+        } finally {
+            $redis->close();
+        }
+
+        $this->assertOkResponse($response, 'CLUSTER FORGET', $port);
+    }
+
+    public function clusterMyId(int $port, bool $tls, ?string $caCert): string
+    {
+        $redis = $this->connectToNode($port, $tls, $caCert);
+
+        try {
+            $response = $redis->rawCommand('CLUSTER', 'MYID');
+        } finally {
+            $redis->close();
+        }
+
+        if (!is_string($response) || trim($response) === '') {
+            throw new RuntimeException(sprintf('CLUSTER MYID returned an unexpected response for port %d.', $port));
+        }
+
+        return trim($response);
+    }
+
     public function clusterSetSlotImporting(int $port, bool $tls, ?string $caCert, int $slot, string $sourceNodeId): void
     {
         $this->clusterSetSlot($port, $tls, $caCert, $slot, 'IMPORTING', $sourceNodeId);
@@ -415,6 +450,31 @@ final class RedisNodeClient
         $this->assertOkResponse($response, sprintf('CLUSTER SETSLOT %d %s', $slot, $subcommand), $port);
     }
 
+    /**
+     * Whether one node still lists another in its own view of the cluster.
+     *
+     * @phpstan-impure the answer changes as the cluster gossips membership
+     */
+    public function knowsClusterNode(int $port, bool $tls, ?string $caCert, string $nodeId): bool
+    {
+        $redis = null;
+        try {
+            $redis = $this->connectToNode($port, $tls, $caCert);
+            $response = $redis->rawCommand('CLUSTER', 'NODES');
+
+            return is_string($response) && str_contains($response, $nodeId);
+        } catch (RedisException) {
+            return false;
+        } finally {
+            if ($redis instanceof Redis) {
+                try {
+                    $redis->close();
+                } catch (RedisException) {
+                }
+            }
+        }
+    }
+
     public function waitForKnownClusterNode(
         int $port,
         bool $tls,
@@ -425,24 +485,8 @@ final class RedisNodeClient
         $deadline = microtime(true) + $seconds;
 
         while (microtime(true) < $deadline) {
-            $redis = null;
-            try {
-                $redis = $this->connectToNode($port, $tls, $caCert);
-                $response = $redis->rawCommand('CLUSTER', 'NODES');
-                if (is_string($response) && str_contains($response, $nodeId)) {
-                    $redis->close();
-
-                    return;
-                }
-            } catch (RedisException) {
-                // Retry until timeout.
-            } finally {
-                if ($redis instanceof Redis) {
-                    try {
-                        $redis->close();
-                    } catch (RedisException) {
-                    }
-                }
+            if ($this->knowsClusterNode($port, $tls, $caCert, $nodeId)) {
+                return;
             }
 
             usleep(100_000);

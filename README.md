@@ -23,9 +23,9 @@ cluster management.
 - Kill an interactively selected primary/replica or a specific replica port.
 - Interactively add a replica to a selected primary.
 - Restart an interactively selected failed replica or a specific failed replica port from saved node metadata.
-- Run serialized chaos loops that kill, restart, add, and reparent replicas,
-  migrate slots between primaries, and fail primaries over to their replicas,
-  waiting for the cluster to converge between each step.
+- Run serialized chaos loops that kill, restart, add, and reparent replicas, add
+  and remove primaries, migrate slots between primaries, and fail primaries over
+  to their replicas, waiting for the cluster to converge between each step.
 - Generate shell completion scripts for supported shells.
 - Start TLS-only local clusters with ephemeral certificates.
 - Generate a standalone startup shell script instead of starting immediately.
@@ -345,13 +345,14 @@ bin/manage-cluster chaos 7000 --categories slot-migration --slot-strategy random
 bin/manage-cluster chaos 7000 --allow-primary-failover
 bin/manage-cluster chaos 7000 --categories primary-failover --watch
 bin/manage-cluster chaos 7000 --allow-replica-reparent
+bin/manage-cluster chaos 7000 --allow-primary-add --allow-primary-remove
 ```
 
 Useful options:
 
 - `--categories LIST` limits event selection to `replica-kill`,
   `replica-restart`, `replica-remove`, `replica-add`, `replica-reparent`,
-  `slot-migration`, and `primary-failover`
+  `primary-add`, `primary-remove`, `slot-migration`, and `primary-failover`
 - `--interval SECONDS` sets the minimum time between completed steps
 - `--max-events N` stops after N completed events
 - `--max-failures N` aborts after N consecutive execution or convergence failures
@@ -366,6 +367,8 @@ Useful options:
   without having to restate the replica categories
 - `--allow-replica-reparent` adds `replica-reparent` to the allowed categories
   without having to restate the replica categories
+- `--allow-primary-add` and `--allow-primary-remove` add the primary membership
+  categories to the allowed categories
 - `--slot-strategy NAME` picks `balanced` (default) or `random` slot selection
 - `--slot-batch N` bounds how many slots one migration event moves (default: 16)
 - `--unsafe` allows lower-redundancy actions that are otherwise skipped
@@ -373,7 +376,8 @@ Useful options:
 Behavior notes:
 
 - `chaos` actively executes `replica-kill`, `replica-restart`, `replica-add`,
-  `replica-reparent`, `slot-migration`, and `primary-failover`
+  `replica-reparent`, `primary-add`, `primary-remove`, `slot-migration`, and
+  `primary-failover`
 - `replica-remove` is parsed for forward compatibility but remains disabled by
   the conservative planner
 - The loop keeps in-memory runtime history so follow-up actions can repair or
@@ -473,6 +477,44 @@ so chaos does not stack another mutation on a replica that is still
 synchronizing. Selection prefers a recipient with no healthy replicas, holds a
 new layout for a while instead of bouncing one replica between two shards, and
 later prefers returning a replica to the shard it came from.
+
+#### Primary membership
+
+`primary-add` and `primary-remove` are off by default, and each is a multi-step
+event that changes how many shards a client has to know about. Enable them with
+`--allow-primary-add` / `--allow-primary-remove`, or name them in
+`--categories`.
+
+`primary-add` grows the cluster:
+
+1. Start a new managed node in the cluster's own directory and join it with
+   `CLUSTER MEET`, so an empty primary appears that owns no keys yet.
+2. Migrate up to `--slot-batch` slots into it from the primary that owns the
+   most, so the new shard starts serving part of the keyspace.
+
+`primary-remove` shrinks it, in the order that keeps the keyspace covered
+throughout:
+
+1. Reattach every replica of the departing primary to a surviving one, so
+   nothing is left following a node that is about to disappear.
+2. Drain every slot it owns, spread in contiguous chunks across the remaining
+   primaries.
+3. `CLUSTER FORGET` its node ID from every remaining reachable node.
+4. Stop the process and drop the port from the managed cluster metadata.
+
+Both refuse to run unless at least three reachable primaries own slots, and a
+removal must leave at least three behind, so the cluster keeps enough primaries
+to authorize a failover. Without `--unsafe` they also wait for a settled
+membership: no unreachable or failed primary, no handshaking node, and no down
+replica, since a replica that is down cannot be moved out of the way. Chaos will
+not grow past six primaries, never removes the seed port it discovers the
+cluster through, holds a new shard for at least one event before taking it away,
+and then prefers completing the add/remove cycle for a primary it created.
+
+Removal drains one slot at a time through the same `MIGRATE` path as
+`slot-migration`, so removing a primary that owns a third of the keyspace is a
+long event. Scoring prefers victims whose drain fits inside `--slot-batch`,
+which is exactly what a chaos-added primary owns.
 
 ### `help`
 

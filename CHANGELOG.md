@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 ### Fixed
+- `chaos` now reloads managed cluster metadata before each event, so ports added
+  or removed during a run are tracked instead of the run acting on the port list
+  it started with.
 - `chaos --categories slot-migration` now waits for unreachable, failed,
   loading, or syncing nodes to settle instead of exhausting `--max-failures`
   after five one-second eligibility checks. With `--watch`, the wait message
@@ -32,6 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `[-]` in the slot column, instead of disappearing from the topology.
 
 ### Added
+- Added `chaos --categories primary-add` and `chaos --categories primary-remove`
+  (also enabled with `chaos --allow-primary-add` / `--allow-primary-remove`),
+  which grow and shrink the primary inventory as multi-step events.
+  `primary-add` starts and `CLUSTER MEET`s an empty managed primary, then
+  migrates up to `--slot-batch` slots into it from the primary that owns the
+  most. `primary-remove` reattaches the departing primary's replicas, drains
+  every slot it owns to the remaining primaries, sends `CLUSTER FORGET` to every
+  remaining node, stops the process, and drops the port from the cluster
+  metadata. Both need at least three reachable slot-owning primaries, a removal
+  must leave three behind, the seed port is never removed, and the cluster will
+  not grow past six primaries.
 - Added `chaos --categories replica-reparent` (also enabled with
   `chaos --allow-replica-reparent`), which moves a live replica to a different
   primary with `CLUSTER REPLICATE`. The replica keeps its process, port, and
