@@ -50,12 +50,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only.
 
 ### Fixed
+- `chaos` no longer starves the categories that plan a single move. Selection
+  drew over the flat candidate list, so a category's share was proportional to
+  how many targets it enumerated: on a cluster with three primaries and nine
+  replicas, `replica-kill` contributed nine candidates against one each from
+  `slot-migration` and `primary-add`, and a run with every category enabled did
+  little but kill and restart replicas. The draw now picks a category first and
+  then one of its candidates, so a category's share depends on its weight and
+  its best candidate's score rather than on how many targets it found.
 - `chaos --categories` weights now change which event is chosen instead of only
   breaking ties. Selection previously shortlisted the highest-scoring candidates
   and applied the weights inside that shortlist, so `--categories
   all,slot-migration:4` had no effect whenever slot migration scored below the
-  leader. The draw now covers every eligible candidate, each score point doubles
-  a candidate's share, and a category weight can outbid a score.
+  leader. Every eligible candidate is now in the draw, each score point doubles
+  a share, and a category weight can outbid a score.
 - `chaos --categories all` no longer gets stuck repeating `primary-failover`
   (or `primary-add`/`primary-remove`) for a whole run. A candidate was only
   deprioritised when the immediately preceding event hit the same target, so a

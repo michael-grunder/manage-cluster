@@ -78,12 +78,20 @@ chosen based on:
   category, a later entry reweights an earlier one in place, and a category
   enabled with `--allow-<category>` keeps the weight `--categories` gave it.
 
-  Selection draws from every eligible candidate rather than a shortlist of the
-  best-scoring ones, with each candidate's share proportional to
-  `weight * 2 ** score`. One score point is therefore worth a factor of two,
-  and a category weight can outbid a lower score: `slot-migration:4` buys two
-  score points. Weights never override the safety and eligibility rules that
-  decide which events can run at all.
+  Selection draws a category first and then one of that category's candidates,
+  each stage weighting a choice by `2 ** score`. One score point is therefore
+  worth a factor of two, and a category weight can outbid a lower score:
+  `slot-migration:4` buys two score points. A category is represented by its
+  best candidate.
+
+  The category stage is what keeps the weights honest. Categories enumerate very
+  different numbers of candidates — `replica-kill` produces one per healthy
+  replica and `replica-reparent` one per replica and target primary, while
+  `slot-migration` and `primary-add` each produce a single plan — so drawing
+  over the flat candidate list would give a category a share proportional to how
+  many targets it happened to find. Weights never override the safety and
+  eligibility rules that decide which events can run at all; a category with no
+  eligible candidate this tick is simply not in the draw.
 
   Initial supported categories:
   - `replica-kill`

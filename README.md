@@ -375,12 +375,19 @@ Useful options:
   likely, and `all,slot-migration:3` keeps every category while favoring slot
   migration. `all:2` weights every category at once, and a later entry
   reweights an earlier one without duplicating or reordering it
-- Chaos draws its next event from every eligible candidate, not just the ones
-  that scored best for the current topology. Each candidate is scored on how
-  useful it is right now, and each score point doubles its share of the draw,
-  so a category weight can outbid a score: a weight of `4` is worth two score
-  points and a weight of `8` is worth three. Weights never make chaos pick an
-  event that is unsafe or ineligible right now
+- Chaos draws its next event in two stages: first a category, then one of that
+  category's candidates. Both stages weight a choice by `2 ** score`, so each
+  score point doubles its share and a category weight can outbid a score — a
+  weight of `4` is worth two score points, `8` is worth three. Drawing the
+  category first is what makes the weights mean what they say: categories
+  enumerate wildly different numbers of candidates (`replica-kill` offers one
+  per healthy replica, while `slot-migration` and `primary-add` each offer a
+  single plan), so a flat draw over the candidates would silently hand replica
+  churn nine tickets to one on a cluster with nine replicas. A category is
+  represented by its best candidate, and nothing eligible is ever unreachable
+- Weights never make chaos pick an event that is unsafe or ineligible right now.
+  A category with no candidates this tick simply is not in the draw, which is
+  why a cluster that is not settled runs replica repairs before anything else
 - A candidate is damped when recent events already aimed the same category at
   the same target, which keeps one shard from monopolising a run by trading
   roles back and forth

@@ -20,11 +20,18 @@
 # later version of manage-cluster adds.
 #
 # The weight defaults to 1 and accepts integers or decimals. Chaos scores every
-# eligible candidate on how useful it is for the current topology and draws one
-# with a probability proportional to `weight * 2 ** score`, so one score point
-# is worth a factor of two and a weight can outbid a score: 4 is worth two
-# score points, 8 is worth three. Weights never make chaos run an event that is
-# unsafe or ineligible right now.
+# eligible candidate on how useful it is for the current topology, then draws a
+# category and one of its candidates, each stage weighted by `2 ** score`. One
+# score point is worth a factor of two and a weight can outbid a score: 4 is
+# worth two score points, 8 is worth three.
+#
+# Drawing the category first means a category's share does not depend on how
+# many targets it enumerated: replica-kill offers one candidate per healthy
+# replica while slot-migration offers a single plan, and both get their weight's
+# share. Weights never make chaos run an event that is unsafe or ineligible
+# right now, and a category with no eligible candidate this tick is simply not
+# in the draw. That is why a cluster with a down replica repairs it before any
+# slot or membership churn is considered.
 categories:
   replica-kill: 1
   replica-restart: 1
