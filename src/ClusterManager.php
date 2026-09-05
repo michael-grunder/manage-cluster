@@ -1335,7 +1335,7 @@ final class ClusterManager
             ChaosOptions::CATEGORY_PRIMARY_REMOVE,
         ];
 
-        if (array_intersect($chaos->categories, $implementedCategories) === []) {
+        if (!$chaos->categories->hasAny($implementedCategories)) {
             throw new RuntimeException('chaos currently implements replica-kill, replica-restart, replica-add, replica-reparent, primary-add, primary-remove, slot-migration, and primary-failover.');
         }
 
@@ -1355,7 +1355,7 @@ final class ClusterManager
             clusterId: is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort),
             seedPort: $seedPort,
             startedAt: microtime(true),
-            allowedCategories: $chaos->categories,
+            allowedCategories: $chaos->categories->names(),
         );
 
         $watch = null;
@@ -1935,7 +1935,7 @@ final class ClusterManager
     ): ?ChaosCandidateEvent {
         $candidates = [];
 
-        if (in_array(ChaosOptions::CATEGORY_REPLICA_RESTART, $chaos->categories, true)) {
+        if ($chaos->categories->has(ChaosOptions::CATEGORY_REPLICA_RESTART)) {
             foreach ($view->replicaStateByPort as $replicaPort => $replica) {
                 if ($replica->reachable || !$replica->managed) {
                     continue;
@@ -1970,7 +1970,7 @@ final class ClusterManager
             }
         }
 
-        if (in_array(ChaosOptions::CATEGORY_REPLICA_ADD, $chaos->categories, true)) {
+        if ($chaos->categories->has(ChaosOptions::CATEGORY_REPLICA_ADD)) {
             foreach ($view->primaryStateByPort as $primaryPort => $primary) {
                 if (!$primary->reachable || !$primary->ownsSlots() || $primary->syncingReplicaCount > 0) {
                     continue;
@@ -2013,7 +2013,7 @@ final class ClusterManager
             }
         }
 
-        if (in_array(ChaosOptions::CATEGORY_REPLICA_KILL, $chaos->categories, true)) {
+        if ($chaos->categories->has(ChaosOptions::CATEGORY_REPLICA_KILL)) {
             foreach ($view->replicaStateByPort as $replicaPort => $replica) {
                 if (!$replica->reachable || $replica->isFailed || $replica->isSyncing || !$replica->managed) {
                     continue;
@@ -2056,33 +2056,33 @@ final class ClusterManager
             }
         }
 
-        if (in_array(ChaosOptions::CATEGORY_SLOT_MIGRATION, $chaos->categories, true)) {
+        if ($chaos->categories->has(ChaosOptions::CATEGORY_SLOT_MIGRATION)) {
             $slotMigration = $this->buildSlotMigrationCandidate($view, $chaos);
             if ($slotMigration instanceof ChaosCandidateEvent) {
                 $candidates[] = $slotMigration;
             }
         }
 
-        if (in_array(ChaosOptions::CATEGORY_PRIMARY_FAILOVER, $chaos->categories, true)) {
+        if ($chaos->categories->has(ChaosOptions::CATEGORY_PRIMARY_FAILOVER)) {
             foreach ($this->buildPrimaryFailoverCandidates($view, $runtime, $chaos) as $failover) {
                 $candidates[] = $failover;
             }
         }
 
-        if (in_array(ChaosOptions::CATEGORY_REPLICA_REPARENT, $chaos->categories, true)) {
+        if ($chaos->categories->has(ChaosOptions::CATEGORY_REPLICA_REPARENT)) {
             foreach ($this->buildReplicaReparentCandidates($view, $runtime, $chaos) as $reparent) {
                 $candidates[] = $reparent;
             }
         }
 
-        if (in_array(ChaosOptions::CATEGORY_PRIMARY_ADD, $chaos->categories, true)) {
+        if ($chaos->categories->has(ChaosOptions::CATEGORY_PRIMARY_ADD)) {
             $primaryAdd = $this->buildPrimaryAddCandidate($view, $runtime, $chaos);
             if ($primaryAdd instanceof ChaosCandidateEvent) {
                 $candidates[] = $primaryAdd;
             }
         }
 
-        if (in_array(ChaosOptions::CATEGORY_PRIMARY_REMOVE, $chaos->categories, true)) {
+        if ($chaos->categories->has(ChaosOptions::CATEGORY_PRIMARY_REMOVE)) {
             foreach ($this->buildPrimaryRemoveCandidates($view, $runtime, $chaos) as $primaryRemove) {
                 $candidates[] = $primaryRemove;
             }
@@ -2094,12 +2094,48 @@ final class ClusterManager
 
         usort($candidates, static fn (ChaosCandidateEvent $left, ChaosCandidateEvent $right): int => $right->score <=> $left->score);
         $topScore = $candidates[0]->score;
-        $topCandidates = array_values(array_filter(
-            $candidates,
-            static fn (ChaosCandidateEvent $candidate): bool => $candidate->score >= ($topScore - 1),
-        ));
+        $topCandidates = [$candidates[0]];
+        foreach (array_slice($candidates, 1) as $candidate) {
+            if ($candidate->score >= ($topScore - 1)) {
+                $topCandidates[] = $candidate;
+            }
+        }
 
-        return $topCandidates[mt_rand(0, count($topCandidates) - 1)];
+        return $this->pickWeightedChaosCandidate($topCandidates, $chaos->categories);
+    }
+
+    /**
+     * Break a score tie with the operator's category weights, so
+     * `--categories all,slot-migration:3` makes an eligible slot migration
+     * three times as likely as an equally scored candidate from a neutral
+     * category. Uniform weights reduce to a plain uniform draw.
+     *
+     * @param non-empty-list<ChaosCandidateEvent> $candidates
+     */
+    private function pickWeightedChaosCandidate(array $candidates, ChaosCategorySelection $categories): ChaosCandidateEvent
+    {
+        $weights = array_map(
+            static fn (ChaosCandidateEvent $candidate): float => $categories->weightFor($candidate->category),
+            $candidates,
+        );
+
+        $total = array_sum($weights);
+        if ($total <= 0.0) {
+            return $candidates[mt_rand(0, count($candidates) - 1)];
+        }
+
+        $threshold = $total * (mt_rand() / mt_getrandmax());
+        $cumulative = 0.0;
+        foreach ($candidates as $index => $candidate) {
+            $cumulative += $weights[$index];
+            if ($threshold < $cumulative) {
+                return $candidate;
+            }
+        }
+
+        // Only reachable when floating point accumulation lands short of the
+        // draw, in which case the last candidate is the right answer.
+        return $candidates[count($candidates) - 1];
     }
 
     /**
@@ -3187,7 +3223,7 @@ final class ClusterManager
     {
         $lines = [];
 
-        if (in_array(ChaosOptions::CATEGORY_SLOT_MIGRATION, $chaos->categories, true)) {
+        if ($chaos->categories->has(ChaosOptions::CATEGORY_SLOT_MIGRATION)) {
             $blockers = $this->slotMigrationEligibility->blockers($view, $chaos->unsafe);
             if ($blockers === []) {
                 $blockers[] = 'no legal slot source and destination';
@@ -3196,7 +3232,7 @@ final class ClusterManager
             $lines[] = sprintf('slot-migration blocked: %s', implode('; ', $blockers));
         }
 
-        if (in_array(ChaosOptions::CATEGORY_PRIMARY_FAILOVER, $chaos->categories, true)) {
+        if ($chaos->categories->has(ChaosOptions::CATEGORY_PRIMARY_FAILOVER)) {
             $blockers = $this->primaryFailoverEligibility->blockers($view, $chaos->unsafe);
             if ($blockers === []) {
                 $blockers[] = 'no caught-up managed replica to promote';
@@ -3205,7 +3241,7 @@ final class ClusterManager
             $lines[] = sprintf('primary-failover blocked: %s', implode('; ', $blockers));
         }
 
-        if (in_array(ChaosOptions::CATEGORY_REPLICA_REPARENT, $chaos->categories, true)) {
+        if ($chaos->categories->has(ChaosOptions::CATEGORY_REPLICA_REPARENT)) {
             $blockers = $this->replicaReparentEligibility->blockers($view, $chaos->unsafe);
             if ($blockers === []) {
                 $blockers[] = 'no spare healthy replica and slot-owning recipient';
@@ -3214,10 +3250,9 @@ final class ClusterManager
             $lines[] = sprintf('replica-reparent blocked: %s', implode('; ', $blockers));
         }
 
-        $membershipCategories = array_values(array_intersect(
+        $membershipCategories = $chaos->categories->intersect(
             [ChaosOptions::CATEGORY_PRIMARY_ADD, ChaosOptions::CATEGORY_PRIMARY_REMOVE],
-            $chaos->categories,
-        ));
+        );
         if ($membershipCategories !== []) {
             $blockers = $this->primaryMembershipEligibility->blockers($view, $chaos->unsafe);
             if ($blockers === [] && in_array(ChaosOptions::CATEGORY_PRIMARY_ADD, $membershipCategories, true)

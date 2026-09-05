@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   printing the line-by-line log, so redirecting to a file still works.
 - `chaos --categories all` enables every event category without enumerating
   them, and `all` can also be mixed into a comma-separated list.
+- `chaos --categories` entries accept a `:WEIGHT` suffix that biases how often
+  a category is chosen, as in `--categories all,slot-migration:3` or
+  `--categories replica-kill:0.5`. Weights default to `1`, accept integers and
+  decimals, may be attached to `all`, and are preserved for categories that are
+  also enabled with `--allow-<category>`. `chaos --watch` shows the weights next
+  to the category list.
 - `chaos --abort-on-failure` stops the run at the first failed event, for
   scripted runs that want a failure to be fatal.
 - An opt-in integration suite, `vendor/bin/phpunit --testsuite integration`,

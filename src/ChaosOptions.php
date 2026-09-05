@@ -54,11 +54,8 @@ final readonly class ChaosOptions
         self::CATEGORY_REPLICA_ADD,
     ];
 
-    /**
-     * @param list<string> $categories
-     */
     public function __construct(
-        public array $categories,
+        public ChaosCategorySelection $categories,
         public int $intervalSeconds,
         public ?int $maxEvents,
         public int $maxFailures,

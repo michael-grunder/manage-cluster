@@ -7,6 +7,7 @@ namespace Mgrunder\CreateCluster\Tests;
 use Mgrunder\CreateCluster\ChaosClusterView;
 use Mgrunder\CreateCluster\ChaosEventRecord;
 use Mgrunder\CreateCluster\ChaosNodeState;
+use Mgrunder\CreateCluster\ChaosCategorySelection;
 use Mgrunder\CreateCluster\ChaosOptions;
 use Mgrunder\CreateCluster\ChaosPrimaryState;
 use Mgrunder\CreateCluster\ChaosRuntimeState;
@@ -325,7 +326,7 @@ final class ChaosWatchTuiRendererTest extends TestCase
     private function options(): ChaosOptions
     {
         return new ChaosOptions(
-            categories: ['replica-kill', 'slot-migration'],
+            categories: ChaosCategorySelection::fromCategories(['replica-kill', 'slot-migration']),
             intervalSeconds: 5,
             maxEvents: 20,
             maxFailures: 3,

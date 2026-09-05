@@ -104,7 +104,7 @@ final class CommandLineParser
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'chaos' => [
-            ['--categories LIST', 'Allowed event categories, or all (default: %chaos-default-categories%)'],
+            ['--categories LIST', 'Allowed event categories as NAME[:WEIGHT], or all (default: %chaos-default-categories%)'],
             ['--interval SECONDS', 'Minimum time between completed chaos steps (default: 8)'],
             ['--max-events N', 'Stop after N completed events (default: unlimited)'],
             ['--max-failures N', 'Abort after N consecutive failures (default: unlimited)'],
@@ -193,6 +193,7 @@ final class CommandLineParser
             'chaos 7000',
             'chaos 7000 --categories replica-kill,replica-restart',
             'chaos 7000 --categories all',
+            'chaos 7000 --categories all,slot-migration:3,replica-kill:0.5',
             'chaos 7000 --max-events 50',
             'chaos 7000 --interval 8 --watch',
             'chaos 7000 --dry-run',
@@ -239,6 +240,8 @@ final class CommandLineParser
         'chaos' => [
             'chaos executes replica kill, restart, add, and reparent, primary add and remove, bounded slot migration, and coordinated primary failover.',
             '--categories accepts %chaos-categories%, or all for every category.',
+            'Any --categories entry may carry a :WEIGHT suffix, so all,slot-migration:3 keeps every category but picks slot-migration three times as often.',
+            'Weights default to 1, accept fractions such as 0.5, and apply to categories enabled with --allow-<category> as well.',
             'Without --categories, chaos runs %chaos-default-categories%; every other category is opt-in.',
             'When --dry-run is used without --max-events, the command prints one planned event and exits.',
             'slot-migration is opt-in through --categories or --allow-slot-migration.',
@@ -299,7 +302,7 @@ final class CommandLineParser
         $memberSize = self::DEFAULT_FILL_MEMBER_SIZE;
         $fillKeys = self::DEFAULT_FILL_TARGET_KEYS;
         $pinPrimaryPort = null;
-        $chaosCategories = ChaosOptions::DEFAULT_CATEGORIES;
+        $chaosCategories = ChaosCategorySelection::fromCategories(ChaosOptions::DEFAULT_CATEGORIES);
         $chaosInterval = 8;
         $chaosMaxEvents = null;
         $chaosMaxFailures = ChaosOptions::UNLIMITED_FAILURES;
@@ -872,24 +875,24 @@ final class CommandLineParser
             throw new InvalidArgumentException(sprintf('--slot-batch must be between 1 and %d.', SlotRange::TOTAL_SLOTS));
         }
 
-        if ($chaosAllowSlotMigration && !in_array(ChaosOptions::CATEGORY_SLOT_MIGRATION, $chaosCategories, true)) {
-            $chaosCategories = [...$chaosCategories, ChaosOptions::CATEGORY_SLOT_MIGRATION];
+        if ($chaosAllowSlotMigration) {
+            $chaosCategories = $chaosCategories->with(ChaosOptions::CATEGORY_SLOT_MIGRATION);
         }
 
-        if ($chaosAllowPrimaryFailover && !in_array(ChaosOptions::CATEGORY_PRIMARY_FAILOVER, $chaosCategories, true)) {
-            $chaosCategories = [...$chaosCategories, ChaosOptions::CATEGORY_PRIMARY_FAILOVER];
+        if ($chaosAllowPrimaryFailover) {
+            $chaosCategories = $chaosCategories->with(ChaosOptions::CATEGORY_PRIMARY_FAILOVER);
         }
 
-        if ($chaosAllowReplicaReparent && !in_array(ChaosOptions::CATEGORY_REPLICA_REPARENT, $chaosCategories, true)) {
-            $chaosCategories = [...$chaosCategories, ChaosOptions::CATEGORY_REPLICA_REPARENT];
+        if ($chaosAllowReplicaReparent) {
+            $chaosCategories = $chaosCategories->with(ChaosOptions::CATEGORY_REPLICA_REPARENT);
         }
 
-        if ($chaosAllowPrimaryAdd && !in_array(ChaosOptions::CATEGORY_PRIMARY_ADD, $chaosCategories, true)) {
-            $chaosCategories = [...$chaosCategories, ChaosOptions::CATEGORY_PRIMARY_ADD];
+        if ($chaosAllowPrimaryAdd) {
+            $chaosCategories = $chaosCategories->with(ChaosOptions::CATEGORY_PRIMARY_ADD);
         }
 
-        if ($chaosAllowPrimaryRemove && !in_array(ChaosOptions::CATEGORY_PRIMARY_REMOVE, $chaosCategories, true)) {
-            $chaosCategories = [...$chaosCategories, ChaosOptions::CATEGORY_PRIMARY_REMOVE];
+        if ($chaosAllowPrimaryRemove) {
+            $chaosCategories = $chaosCategories->with(ChaosOptions::CATEGORY_PRIMARY_REMOVE);
         }
 
         $chaosOptions = null;
@@ -1409,31 +1412,65 @@ final class CommandLineParser
     }
 
     /**
-     * @return list<string>
+     * Parse `--categories`, where every token is a category or the `all` alias,
+     * optionally suffixed with `:WEIGHT` to bias how often chaos picks it. A
+     * later token wins the weight argument without moving the category, so
+     * `all,slot-migration:3` keeps the canonical order and only reweights one
+     * entry.
      */
-    private function parseChaosCategories(string $value): array
+    private function parseChaosCategories(string $value): ChaosCategorySelection
     {
         $tokens = array_values(array_filter(array_map('trim', explode(',', strtolower($value))), static fn (string $token): bool => $token !== ''));
         if ($tokens === []) {
             throw new InvalidArgumentException('--categories must contain at least one event category.');
         }
 
-        $categories = [];
+        $weightByCategory = [];
         foreach ($tokens as $token) {
-            if ($token === ChaosOptions::CATEGORY_ALIAS_ALL) {
-                $categories = [...$categories, ...ChaosOptions::SUPPORTED_CATEGORIES];
+            [$category, $weight] = $this->parseChaosCategoryToken($token);
+
+            if ($category === ChaosOptions::CATEGORY_ALIAS_ALL) {
+                foreach (ChaosOptions::SUPPORTED_CATEGORIES as $supported) {
+                    $weightByCategory[$supported] = $weight;
+                }
 
                 continue;
             }
 
-            if (!in_array($token, ChaosOptions::SUPPORTED_CATEGORIES, true)) {
-                throw new InvalidArgumentException(sprintf('Unsupported chaos category: %s', $token));
+            if (!in_array($category, ChaosOptions::SUPPORTED_CATEGORIES, true)) {
+                throw new InvalidArgumentException(sprintf('Unsupported chaos category: %s', $category));
             }
 
-            $categories[] = $token;
+            $weightByCategory[$category] = $weight;
         }
 
-        return array_values(array_unique($categories));
+        return new ChaosCategorySelection($weightByCategory);
+    }
+
+    /**
+     * @return array{0: string, 1: float}
+     */
+    private function parseChaosCategoryToken(string $token): array
+    {
+        $parts = explode(':', $token, 2);
+        $category = trim($parts[0]);
+        if ($category === '') {
+            throw new InvalidArgumentException(sprintf('Invalid chaos category token: %s', $token));
+        }
+
+        if (!array_key_exists(1, $parts)) {
+            return [$category, ChaosCategorySelection::DEFAULT_WEIGHT];
+        }
+
+        $rawWeight = trim($parts[1]);
+        if ($rawWeight === '' || !is_numeric($rawWeight)) {
+            throw new InvalidArgumentException(sprintf(
+                'Chaos category weight for %s must be a finite number greater than 0.',
+                $category,
+            ));
+        }
+
+        return [$category, (float) $rawWeight];
     }
 
     /**

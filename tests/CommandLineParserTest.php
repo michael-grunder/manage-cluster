@@ -658,7 +658,7 @@ final class CommandLineParserTest extends TestCase
         self::assertSame('chaos', $options->action);
         self::assertSame([7000], $options->ports);
         self::assertNotNull($options->chaos);
-        self::assertSame(['replica-kill', 'replica-restart', 'replica-add'], $options->chaos->categories);
+        self::assertSame(['replica-kill', 'replica-restart', 'replica-add'], $options->chaos->categories->names());
         self::assertSame(8, $options->chaos->intervalSeconds);
         self::assertFalse($options->chaos->dryRun);
         self::assertSame(SlotMigrationStrategy::Balanced, $options->chaos->slotMigrationStrategy);
@@ -698,7 +698,7 @@ final class CommandLineParserTest extends TestCase
         ]);
 
         self::assertNotNull($options->chaos);
-        self::assertSame(['replica-kill', 'replica-restart'], $options->chaos->categories);
+        self::assertSame(['replica-kill', 'replica-restart'], $options->chaos->categories->names());
         self::assertSame(5, $options->chaos->intervalSeconds);
         self::assertSame(10, $options->chaos->maxEvents);
         self::assertSame(3, $options->chaos->maxFailures);
@@ -977,7 +977,7 @@ final class CommandLineParserTest extends TestCase
         $options = $parser->parse(['bin/manage-cluster', 'chaos', '7000', '--categories', 'all']);
 
         self::assertNotNull($options->chaos);
-        self::assertSame(ChaosOptions::SUPPORTED_CATEGORIES, $options->chaos->categories);
+        self::assertSame(ChaosOptions::SUPPORTED_CATEGORIES, $options->chaos->categories->names());
     }
 
     public function testChaosCategoriesAllIsCaseInsensitiveAndDeduplicated(): void
@@ -992,8 +992,118 @@ final class CommandLineParserTest extends TestCase
                 ChaosOptions::SUPPORTED_CATEGORIES,
                 static fn (string $category): bool => $category !== ChaosOptions::CATEGORY_REPLICA_KILL,
             ))],
-            $options->chaos->categories,
+            $options->chaos->categories->names(),
         );
+    }
+
+    public function testChaosCategoryWeightsBiasSelectionWithoutChangingMembership(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'chaos', '7000', '--categories', 'all,slot-migration:3']);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame(ChaosOptions::SUPPORTED_CATEGORIES, $options->chaos->categories->names());
+        self::assertSame(3.0, $options->chaos->categories->weightFor(ChaosOptions::CATEGORY_SLOT_MIGRATION));
+        self::assertSame(1.0, $options->chaos->categories->weightFor(ChaosOptions::CATEGORY_REPLICA_KILL));
+    }
+
+    public function testChaosCategoryWeightsAcceptFractionsAndIntegers(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse([
+            'bin/manage-cluster',
+            'chaos',
+            '7000',
+            '--categories',
+            'replica-kill:.5,replica-add:2,replica-restart',
+        ]);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame(['replica-kill', 'replica-add', 'replica-restart'], $options->chaos->categories->names());
+        self::assertSame(0.5, $options->chaos->categories->weightFor(ChaosOptions::CATEGORY_REPLICA_KILL));
+        self::assertSame(2.0, $options->chaos->categories->weightFor(ChaosOptions::CATEGORY_REPLICA_ADD));
+        self::assertSame(1.0, $options->chaos->categories->weightFor(ChaosOptions::CATEGORY_REPLICA_RESTART));
+    }
+
+    public function testChaosCategoryWeightOnAllAppliesToEveryCategory(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'chaos', '7000', '--categories', 'all:2,slot-migration:3']);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame(2.0, $options->chaos->categories->weightFor(ChaosOptions::CATEGORY_REPLICA_KILL));
+        self::assertSame(3.0, $options->chaos->categories->weightFor(ChaosOptions::CATEGORY_SLOT_MIGRATION));
+    }
+
+    public function testLastChaosCategoryWeightWinsWithoutDuplicatingTheCategory(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse([
+            'bin/manage-cluster',
+            'chaos',
+            '7000',
+            '--categories',
+            'slot-migration:2,replica-kill,slot-migration:5',
+        ]);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame(['slot-migration', 'replica-kill'], $options->chaos->categories->names());
+        self::assertSame(5.0, $options->chaos->categories->weightFor(ChaosOptions::CATEGORY_SLOT_MIGRATION));
+    }
+
+    public function testAllowFlagsKeepAWeightGivenInCategories(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse([
+            'bin/manage-cluster',
+            'chaos',
+            '7000',
+            '--allow-slot-migration',
+            '--categories',
+            'slot-migration:2',
+        ]);
+
+        self::assertNotNull($options->chaos);
+        self::assertTrue($options->chaos->allowSlotMigration);
+        self::assertSame(['slot-migration'], $options->chaos->categories->names());
+        self::assertSame(2.0, $options->chaos->categories->weightFor(ChaosOptions::CATEGORY_SLOT_MIGRATION));
+    }
+
+    public function testAllowFlagsAddCategoriesAtTheNeutralWeight(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'chaos', '7000', '--allow-primary-add']);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame(1.0, $options->chaos->categories->weightFor(ChaosOptions::CATEGORY_PRIMARY_ADD));
+    }
+
+    #[DataProvider('illegalChaosCategoryWeights')]
+    public function testChaosRejectsIllegalCategoryWeights(string $value): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Chaos category weight for slot-migration must be a finite number greater than 0.');
+
+        $parser->parse(['bin/manage-cluster', 'chaos', '7000', '--categories', $value]);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function illegalChaosCategoryWeights(): iterable
+    {
+        yield 'not a number' => ['slot-migration:heavy'];
+        yield 'empty weight' => ['slot-migration:'];
+        yield 'zero' => ['slot-migration:0'];
+        yield 'negative' => ['slot-migration:-2'];
     }
 
     public function testChaosRejectsUnknownCategory(): void
@@ -1016,7 +1126,7 @@ final class CommandLineParserTest extends TestCase
         self::assertTrue($options->chaos->allowSlotMigration);
         self::assertSame(
             ['replica-kill', 'replica-restart', 'replica-add', 'slot-migration'],
-            $options->chaos->categories,
+            $options->chaos->categories->names(),
         );
     }
 
@@ -1034,7 +1144,7 @@ final class CommandLineParserTest extends TestCase
         ]);
 
         self::assertNotNull($options->chaos);
-        self::assertSame(['slot-migration'], $options->chaos->categories);
+        self::assertSame(['slot-migration'], $options->chaos->categories->names());
     }
 
     public function testAllowPrimaryFailoverAddsTheCategoryToTheDefaults(): void
@@ -1047,7 +1157,7 @@ final class CommandLineParserTest extends TestCase
         self::assertTrue($options->chaos->allowPrimaryFailover);
         self::assertSame(
             ['replica-kill', 'replica-restart', 'replica-add', 'primary-failover'],
-            $options->chaos->categories,
+            $options->chaos->categories->names(),
         );
     }
 
@@ -1065,7 +1175,7 @@ final class CommandLineParserTest extends TestCase
         ]);
 
         self::assertNotNull($options->chaos);
-        self::assertSame(['primary-failover'], $options->chaos->categories);
+        self::assertSame(['primary-failover'], $options->chaos->categories->names());
     }
 
     public function testAllowPrimaryFailoverRequiresChaos(): void
@@ -1088,7 +1198,7 @@ final class CommandLineParserTest extends TestCase
         self::assertTrue($options->chaos->allowReplicaReparent);
         self::assertSame(
             ['replica-kill', 'replica-restart', 'replica-add', 'replica-reparent'],
-            $options->chaos->categories,
+            $options->chaos->categories->names(),
         );
     }
 
@@ -1106,7 +1216,7 @@ final class CommandLineParserTest extends TestCase
         ]);
 
         self::assertNotNull($options->chaos);
-        self::assertSame(['replica-reparent'], $options->chaos->categories);
+        self::assertSame(['replica-reparent'], $options->chaos->categories->names());
     }
 
     public function testAllowReplicaReparentRequiresChaos(): void
@@ -1136,7 +1246,7 @@ final class CommandLineParserTest extends TestCase
         self::assertTrue($options->chaos->allowPrimaryRemove);
         self::assertSame(
             ['replica-kill', 'replica-restart', 'replica-add', 'primary-add', 'primary-remove'],
-            $options->chaos->categories,
+            $options->chaos->categories->names(),
         );
     }
 
@@ -1154,7 +1264,7 @@ final class CommandLineParserTest extends TestCase
         ]);
 
         self::assertNotNull($options->chaos);
-        self::assertSame(['primary-add', 'primary-remove'], $options->chaos->categories);
+        self::assertSame(['primary-add', 'primary-remove'], $options->chaos->categories->names());
     }
 
     public function testAllowPrimaryAddRequiresChaos(): void

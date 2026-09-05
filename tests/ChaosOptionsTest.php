@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mgrunder\CreateCluster\Tests;
 
+use Mgrunder\CreateCluster\ChaosCategorySelection;
 use Mgrunder\CreateCluster\ChaosOptions;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -40,7 +41,7 @@ final class ChaosOptionsTest extends TestCase
     private static function options(int $maxFailures, bool $abortOnFailure): ChaosOptions
     {
         return new ChaosOptions(
-            categories: ChaosOptions::DEFAULT_CATEGORIES,
+            categories: ChaosCategorySelection::fromCategories(ChaosOptions::DEFAULT_CATEGORIES),
             intervalSeconds: 8,
             maxEvents: null,
             maxFailures: $maxFailures,

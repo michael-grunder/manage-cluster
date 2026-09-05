@@ -386,7 +386,7 @@ final class ChaosWatchTuiRenderer
         }
 
         $spans[] = Span::styled('  categories ', Style::default()->fg(AnsiColor::DarkGray));
-        $spans[] = Span::fromString(implode(',', $options->categories));
+        $spans[] = Span::fromString($options->categories->describe());
 
         return ParagraphWidget::fromLines(Line::fromSpans(...$spans));
     }

@@ -35,6 +35,7 @@ chosen based on:
 ### Examples
 `bin/manage-cluster chaos 7000`
 `bin/manage-cluster chaos 7000 --categories replica-kill,replica-restart`
+`bin/manage-cluster chaos 7000 --categories all,slot-migration:3`
 `bin/manage-cluster chaos 7000 --max-events 50`
 `bin/manage-cluster chaos 7000 --interval 8`
 `bin/manage-cluster chaos 7000 --dry-run`
@@ -50,6 +51,17 @@ chosen based on:
   Comma-separated set of event categories allowed in this run. The literal
   value `all` expands to every supported category, so it does not have to be
   enumerated, and it can be combined with individual categories.
+
+  Each entry may be written as `<category>:<weight>` to bias selection. The
+  weight is a positive integer or decimal, defaults to `1`, and multiplies the
+  chance that a tied candidate from that category is chosen, so
+  `all,slot-migration:3` allows everything but picks slot migration three times
+  as often, and `replica-kill:0.1` makes replica kills a tenth as likely. A
+  weight given for `all` applies to every category, a later entry reweights an
+  earlier one in place, and a category enabled with `--allow-<category>` keeps
+  the weight `--categories` gave it. Weights only break ties between candidates
+  the planner already considers best; they never override the safety and
+  eligibility rules that decide which events can run at all.
 
   Initial supported categories:
   - `replica-kill`

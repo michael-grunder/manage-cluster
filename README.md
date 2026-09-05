@@ -340,6 +340,7 @@ rather than a fully generic chaos monkey.
 bin/manage-cluster chaos 7000
 bin/manage-cluster chaos 7000 --categories replica-kill,replica-restart
 bin/manage-cluster chaos 7000 --categories all
+bin/manage-cluster chaos 7000 --categories all,slot-migration:3,replica-kill:0.5
 bin/manage-cluster chaos 7000 --max-events 50
 bin/manage-cluster chaos 7000 --interval 8 --watch
 bin/manage-cluster chaos 7000 --dry-run
@@ -359,6 +360,15 @@ Useful options:
   pass `all` instead of a list to allow every category. Without
   `--categories`, chaos runs `replica-kill`, `replica-restart`, and
   `replica-add`, and every other category is opt-in
+- Every `--categories` entry may carry a `:WEIGHT` suffix that biases how often
+  chaos picks that category. The weight defaults to `1` and accepts integers or
+  decimals, so `slot-migration:3` is three times as likely to win a tie,
+  `replica-kill:0.5` is half as likely, and `all,slot-migration:3` keeps every
+  category while favoring slot migration. `all:2` weights every category at
+  once, and a later entry reweights an earlier one without duplicating or
+  reordering it. Weights bias the choice among the candidates chaos already
+  considers best for the current topology; they never make it pick an event
+  that is unsafe or ineligible right now
 - `--interval SECONDS` sets the minimum time between completed steps
 - `--max-events N` stops after N completed events
 - `--max-failures N` aborts after N consecutive execution or convergence
@@ -380,6 +390,9 @@ Useful options:
   without having to restate the replica categories
 - `--allow-primary-add` and `--allow-primary-remove` add the primary membership
   categories to the allowed categories
+- Categories enabled through an `--allow-<category>` flag can still be weighted
+  in `--categories`, as in `--allow-slot-migration --categories
+  slot-migration:2`
 - `--slot-strategy NAME` picks `balanced` (default) or `random` slot selection
 - `--slot-batch N` bounds how many slots one migration event moves (default: 16)
 - `--unsafe` allows lower-redundancy actions that are otherwise skipped

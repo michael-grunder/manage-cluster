@@ -8,6 +8,7 @@ use Mgrunder\CreateCluster\ChaosCandidateEvent;
 use Mgrunder\CreateCluster\ChaosClusterView;
 use Mgrunder\CreateCluster\ChaosEventRecord;
 use Mgrunder\CreateCluster\ChaosNodeState;
+use Mgrunder\CreateCluster\ChaosCategorySelection;
 use Mgrunder\CreateCluster\ChaosOptions;
 use Mgrunder\CreateCluster\ChaosPrimaryState;
 use Mgrunder\CreateCluster\ChaosRuntimeState;
@@ -562,7 +563,7 @@ MESSAGE);
     private function chaosOptions(): ChaosOptions
     {
         return new ChaosOptions(
-            categories: [ChaosOptions::CATEGORY_PRIMARY_FAILOVER],
+            categories: ChaosCategorySelection::fromCategories([ChaosOptions::CATEGORY_PRIMARY_FAILOVER]),
             intervalSeconds: 8,
             maxEvents: null,
             maxFailures: 5,
@@ -1440,6 +1441,89 @@ MESSAGE);
             role: $role,
             replicationOffset: $replicationOffset,
             health: $health,
+        );
+    }
+
+    #[DataProvider('chaosCategoryWeightDistributions')]
+    public function testWeightedChaosPickFollowsTheCategoryWeights(
+        float $slotMigrationWeight,
+        float $expectedShare,
+    ): void {
+        $draws = 4000;
+        $counts = $this->invokeWeightedChaosPickCounts(
+            new ChaosCategorySelection([
+                ChaosOptions::CATEGORY_REPLICA_KILL => 1.0,
+                ChaosOptions::CATEGORY_SLOT_MIGRATION => $slotMigrationWeight,
+            ]),
+            $draws,
+        );
+
+        $share = $counts[ChaosOptions::CATEGORY_SLOT_MIGRATION] / $draws;
+
+        self::assertSame($draws, array_sum($counts));
+        self::assertEqualsWithDelta($expectedShare, $share, 0.03);
+    }
+
+    /**
+     * @return iterable<string, array{float, float}>
+     */
+    public static function chaosCategoryWeightDistributions(): iterable
+    {
+        yield 'neutral weights split evenly' => [1.0, 0.5];
+        yield 'triple weight wins three of four ties' => [3.0, 0.75];
+        yield 'fractional weight is picked less often' => [0.25, 0.2];
+    }
+
+    public function testWeightedChaosPickTreatsDisabledCategoriesAsNeutral(): void
+    {
+        $draws = 4000;
+        $counts = $this->invokeWeightedChaosPickCounts(
+            ChaosCategorySelection::fromCategories([ChaosOptions::CATEGORY_REPLICA_KILL]),
+            $draws,
+        );
+
+        self::assertEqualsWithDelta(0.5, $counts[ChaosOptions::CATEGORY_SLOT_MIGRATION] / $draws, 0.03);
+    }
+
+    /**
+     * @return array<string, int> pick count keyed by chaos category
+     */
+    private function invokeWeightedChaosPickCounts(ChaosCategorySelection $categories, int $draws): array
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $method = new ReflectionClass($manager)->getMethod('pickWeightedChaosCandidate');
+        $candidates = [
+            $this->chaosCandidate(ChaosOptions::CATEGORY_REPLICA_KILL),
+            $this->chaosCandidate(ChaosOptions::CATEGORY_SLOT_MIGRATION),
+        ];
+
+        $counts = [
+            ChaosOptions::CATEGORY_REPLICA_KILL => 0,
+            ChaosOptions::CATEGORY_SLOT_MIGRATION => 0,
+        ];
+
+        mt_srand(20250905);
+        for ($draw = 0; $draw < $draws; $draw++) {
+            $picked = $method->invoke($manager, $candidates, $categories);
+            self::assertInstanceOf(ChaosCandidateEvent::class, $picked);
+            $counts[$picked->category]++;
+        }
+
+        mt_srand();
+
+        return $counts;
+    }
+
+    private function chaosCandidate(string $category): ChaosCandidateEvent
+    {
+        return new ChaosCandidateEvent(
+            category: $category,
+            targetPort: 7003,
+            targetPrimaryPort: 7000,
+            score: 3,
+            summary: $category,
+            postcondition: sprintf('%s converged', $category),
+            reasons: ['tied with every other candidate'],
         );
     }
 }
