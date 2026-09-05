@@ -109,7 +109,7 @@ final class CommandLineParser
             ['--max-events N', 'Stop after N completed events (default: unlimited)'],
             ['--max-failures N', 'Abort after N consecutive failures (default: 5)'],
             ['--dry-run', 'Select and print events without mutating cluster state'],
-            ['--watch', 'Print compact state and wait-loop progress'],
+            ['--watch', 'Open a fullscreen live view of topology and chaos events'],
             ['--seed N', 'PRNG seed for reproducible event selection'],
             ['--wait-timeout SECONDS', 'Maximum wait for event convergence (default: 60)'],
             ['--cooldown SECONDS', 'Quiet period after convergence (default: 2)'],

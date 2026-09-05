@@ -117,4 +117,12 @@ final class ChaosRuntimeState
             static fn (ChaosEventRecord $event): bool => $event->status === 'completed',
         ));
     }
+
+    public function failedEventCount(): int
+    {
+        return count(array_filter(
+            $this->history,
+            static fn (ChaosEventRecord $event): bool => $event->status === 'failed',
+        ));
+    }
 }

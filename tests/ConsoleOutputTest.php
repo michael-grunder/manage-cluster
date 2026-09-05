@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mgrunder\CreateCluster\Tests;
 
 use Mgrunder\CreateCluster\ConsoleOutput;
+use Mgrunder\CreateCluster\ConsoleOutputLevel;
 use PHPUnit\Framework\TestCase;
 
 final class ConsoleOutputTest extends TestCase
@@ -38,6 +39,66 @@ final class ConsoleOutputTest extends TestCase
             stream_get_contents($stdout),
         );
         self::assertSame("[error] Startup failed\n", stream_get_contents($stderr));
+    }
+
+    public function testRedirectSendsEveryWriteToTheSinkInsteadOfTheStreams(): void
+    {
+        $stdout = fopen('php://temp', 'r+');
+        $stderr = fopen('php://temp', 'r+');
+
+        self::assertIsResource($stdout);
+        self::assertIsResource($stderr);
+
+        $output = new ConsoleOutput(interactive: true, stdout: $stdout, stderr: $stderr);
+
+        $captured = [];
+        $output->redirectTo(static function (ConsoleOutputLevel $level, string $message) use (&$captured): void {
+            $captured[] = [$level, $message];
+        });
+
+        $output->step('Stopping replica 7005');
+        $output->info('Reloading metadata');
+        $output->success('Replica stopped');
+        $output->warning('Retrying');
+        $output->error('Node unreachable');
+        $output->detail('State', '/tmp/manage-cluster');
+        $output->progress('Migrating slot 42', true);
+        $output->finishProgress();
+
+        rewind($stdout);
+        rewind($stderr);
+
+        self::assertSame('', stream_get_contents($stdout));
+        self::assertSame('', stream_get_contents($stderr));
+        self::assertSame([
+            [ConsoleOutputLevel::Step, 'Stopping replica 7005'],
+            [ConsoleOutputLevel::Info, 'Reloading metadata'],
+            [ConsoleOutputLevel::Success, 'Replica stopped'],
+            [ConsoleOutputLevel::Warning, 'Retrying'],
+            [ConsoleOutputLevel::Error, 'Node unreachable'],
+            [ConsoleOutputLevel::Detail, 'State: /tmp/manage-cluster'],
+            [ConsoleOutputLevel::Progress, 'Migrating slot 42'],
+        ], $captured);
+    }
+
+    public function testClearingTheRedirectRestoresStreamWrites(): void
+    {
+        $stdout = fopen('php://temp', 'r+');
+        $stderr = fopen('php://temp', 'r+');
+
+        self::assertIsResource($stdout);
+        self::assertIsResource($stderr);
+
+        $output = new ConsoleOutput(interactive: false, stdout: $stdout, stderr: $stderr);
+        $output->redirectTo(static function (ConsoleOutputLevel $level, string $message): void {
+        });
+        $output->info('Captured');
+        $output->redirectTo(null);
+        $output->info('Printed');
+
+        rewind($stdout);
+
+        self::assertSame("[i] Printed\n", stream_get_contents($stdout));
     }
 
     public function testInteractiveProgressUsesAnsiAndFinishesCleanly(): void

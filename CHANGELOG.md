@@ -7,10 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 ### Added
+- `chaos --watch` now opens a fullscreen `php-tui` dashboard: live cluster
+  topology with slot ranges, slot counts, and per-shard replica health on top,
+  and a scrolling chaos event log underneath. `j`/`k`, `Up`/`Down`, `PgUp`, and
+  `PgDn` scroll the log, `f` follows the newest entries, and `q`, `Esc`, or
+  `Ctrl-C` stops the run. Without a TTY on stdin and stdout, `--watch` keeps
+  printing the line-by-line log, so redirecting to a file still works.
 - `chaos --categories all` enables every event category without enumerating
   them, and `all` can also be mixed into a comma-separated list.
 
 ### Fixed
+- `chaos --categories primary-failover,replica-reparent,primary-add,primary-remove`
+  now runs those events instead of aborting after `--max-failures` with
+  "<category> is missing a ... plan". The chosen event kept only slot-migration
+  plans, so every other planned category lost its plan before execution.
 - `chaos` now reloads managed cluster metadata before each event, so ports added
   or removed during a run are tracked instead of the run acting on the port list
   it started with.
@@ -20,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identifies the exact blocking conditions and ports.
 
 ### Changed
+- `chaos --watch` now routes step and progress messages, including slot
+  migration progress, into the event log instead of printing them over the
+  live view.
 - `help chaos` now documents the default event categories
   (`replica-kill,replica-restart,replica-add`) and lists every category
   `--categories` accepts, including `all`.

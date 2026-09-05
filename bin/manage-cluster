@@ -5,6 +5,7 @@ declare(strict_types=1);
 
 use Mgrunder\CreateCluster\BuildInfoRenderer;
 use Mgrunder\CreateCluster\BuildInfoResolver;
+use Mgrunder\CreateCluster\ChaosWatchTuiRenderer;
 use Mgrunder\CreateCluster\ClusterManager;
 use Mgrunder\CreateCluster\ClusterShardsParser;
 use Mgrunder\CreateCluster\ClusterStateStore;
@@ -101,6 +102,7 @@ $manager = new ClusterManager(
     clusterShardsParser: new ClusterShardsParser(),
     clusterStatusRenderer: new ClusterStatusRenderer(),
     clusterStatusTuiRenderer: new ClusterStatusTuiRenderer(),
+    chaosWatchTuiRenderer: new ChaosWatchTuiRenderer(),
     managedClusterSummaryRenderer: new ManagedClusterSummaryRenderer(),
     managedClusterSummaryTuiRenderer: new ManagedClusterSummaryTuiRenderer(),
     clusterTreeSelector: new ClusterTreeSelector(new ClusterTreeViewBuilder()),

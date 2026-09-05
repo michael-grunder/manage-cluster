@@ -17,6 +17,12 @@ final class ClusterManager
     private const float STOP_SIGNAL_WAIT_SECONDS = 1.0;
     private const int REPLICA_STATE_WAIT_POLL_MICROSECONDS = 250_000;
 
+    /**
+     * Live view model while `chaos --watch` owns the terminal, and null
+     * whenever chaos logs line by line instead.
+     */
+    private ?ChaosWatchState $chaosWatch = null;
+
     public function __construct(
         private readonly SystemInspector $systemInspector,
         private readonly ClusterStateStore $stateStore,
@@ -26,6 +32,7 @@ final class ClusterManager
         private readonly ClusterShardsParser $clusterShardsParser,
         private readonly ClusterStatusRenderer $clusterStatusRenderer,
         private readonly ClusterStatusTuiRenderer $clusterStatusTuiRenderer,
+        private readonly ChaosWatchTuiRenderer $chaosWatchTuiRenderer,
         private readonly ManagedClusterSummaryRenderer $managedClusterSummaryRenderer,
         private readonly ManagedClusterSummaryTuiRenderer $managedClusterSummaryTuiRenderer,
         private readonly ClusterTreeSelector $clusterTreeSelector,
@@ -1351,12 +1358,44 @@ final class ClusterManager
             allowedCategories: $chaos->categories,
         );
 
+        $watch = null;
+
+        try {
+            $watch = $this->startChaosWatch($chaos, $runtime);
+            $this->runChaosLoop($options, $chaos, $runtime, $metadata, $seedPort, $tls, $caCert);
+        } finally {
+            $this->stopChaosWatch();
+        }
+
+        if ($watch instanceof ChaosWatchState && $watch->quitRequested()) {
+            $this->output->success(sprintf('Chaos stopped after %d completed events.', $runtime->completedEventCount()));
+
+            return;
+        }
+
+        $this->output->success(sprintf('Chaos finished after %d planned events.', $runtime->completedEventCount()));
+    }
+
+    /**
+     * @param array<string, mixed> $metadata
+     */
+    private function runChaosLoop(
+        CommandLineOptions $options,
+        ChaosOptions $chaos,
+        ChaosRuntimeState $runtime,
+        array $metadata,
+        int $seedPort,
+        bool $tls,
+        ?string $caCert,
+    ): void {
         $dryRunBudget = $chaos->dryRun && $chaos->maxEvents === null ? 1 : $chaos->maxEvents;
 
         while (true) {
             if ($dryRunBudget !== null && $runtime->completedEventCount() >= $dryRunBudget) {
-                $this->output->success(sprintf('Chaos finished after %d planned events.', $runtime->completedEventCount()));
+                return;
+            }
 
+            if ($this->chaosWatchStopped()) {
                 return;
             }
 
@@ -1376,34 +1415,26 @@ final class ClusterManager
 
             $candidate = $this->selectChaosCandidate($view, $runtime, $chaos);
             if (!$candidate instanceof ChaosCandidateEvent) {
-                $this->emitChaosWatchLine($chaos, $this->formatNoEligibleChaosEventsLine($view, $chaos));
-                sleep(1);
+                $this->emitChaosWatchLine($chaos, ChaosWatchLogLevel::Waiting, $this->formatNoEligibleChaosEventsLine($view, $chaos));
+                $this->pauseChaos(1.0);
                 continue;
             }
 
-            $event = new ChaosEventRecord(
+            $event = ChaosEventRecord::fromCandidate(
                 id: $runtime->nextEventId(),
-                category: $candidate->category,
-                status: 'planned',
-                targetPort: $candidate->targetPort,
-                targetPrimaryPort: $candidate->targetPrimaryPort,
+                candidate: $candidate,
                 startedAt: microtime(true),
-                completedAt: null,
-                summary: $candidate->summary,
-                postcondition: $candidate->postcondition,
-                reasons: $candidate->reasons,
-                slotMigrationPlan: $candidate->slotMigrationPlan,
             );
             $runtime->inflightEvent = $event;
-            $this->emitChaosWatchLine($chaos, sprintf('[chaos] event#%d %s', $event->id, $event->summary));
+            $this->emitChaosWatchLine($chaos, ChaosWatchLogLevel::Event, sprintf('event#%d %s', $event->id, $event->summary));
 
             if ($chaos->dryRun) {
                 $planned = $event->withStatus('completed', microtime(true), ['dry-run']);
                 $runtime->rememberHistory($planned);
                 $runtime->inflightEvent = null;
                 $runtime->resetFailures();
-                $this->emitChaosWatchLine($chaos, sprintf(
-                    '[plan ] %s | because: %s',
+                $this->emitChaosWatchLine($chaos, ChaosWatchLogLevel::Plan, sprintf(
+                    '%s | because: %s',
                     $planned->summary,
                     implode('; ', $candidate->reasons),
                 ));
@@ -1420,10 +1451,15 @@ final class ClusterManager
                 $completed = $this->waitForChaosEventConvergence($waiting, $runtime, $metadata, $seedPort, $tls, $caCert, $chaos);
                 $runtime->rememberHistory($completed);
                 $runtime->inflightEvent = null;
+
+                if ($completed->status !== 'completed') {
+                    return;
+                }
+
                 $runtime->resetFailures();
 
                 $elapsedSeconds = $completed->completedAt !== null ? max(0.0, $completed->completedAt - $completed->startedAt) : 0.0;
-                $this->emitChaosWatchLine($chaos, sprintf('[done ] %s completed in %.1fs', $completed->summary, $elapsedSeconds));
+                $this->emitChaosWatchLine($chaos, ChaosWatchLogLevel::Done, sprintf('%s completed in %.1fs', $completed->summary, $elapsedSeconds));
             } catch (\Throwable $exception) {
                 $runtime->markFailure();
                 $failed = $event->withStatus('failed', microtime(true), [$exception->getMessage()]);
@@ -1439,7 +1475,7 @@ final class ClusterManager
                 }
 
                 $this->output->warning($exception->getMessage());
-                sleep(1);
+                $this->pauseChaos(1.0);
                 continue;
             }
 
@@ -1850,7 +1886,7 @@ final class ClusterManager
             true,
         );
 
-        return new ChaosClusterView(
+        $view = new ChaosClusterView(
             clusterId: is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort),
             seedPort: $seedPort,
             topologyHash: $topologyHash,
@@ -1861,6 +1897,16 @@ final class ClusterManager
             replicaStateByPort: $replicaStateByPort,
             degradedPrimaryPorts: $degradedPrimaryPorts,
         );
+
+        // Every discovery is the freshest topology the run has, so the watch
+        // view tracks it without the chaos loop having to push separately.
+        $watch = $this->chaosWatch;
+        if ($watch instanceof ChaosWatchState) {
+            $watch->updateView($view);
+            $this->chaosWatchTuiRenderer->render($watch);
+        }
+
+        return $view;
     }
 
     private function selectChaosCandidate(
@@ -2759,9 +2805,7 @@ final class ClusterManager
             $view = $this->discoverChaosClusterView($runtime, $metadata, $seedPort, $tls, $caCert);
             $postconditionSatisfied = $this->isChaosEventPostconditionSatisfied($event, $view);
 
-            if ($chaos->watch) {
-                $this->emitChaosWatchLine($chaos, $this->formatChaosWaitLine($event, $view));
-            }
+            $this->emitChaosWatchLine($chaos, ChaosWatchLogLevel::Waiting, $this->formatChaosWaitLine($event, $view));
 
             if ($postconditionSatisfied) {
                 if ($lastTopologyHash === $view->topologyHash) {
@@ -2781,7 +2825,11 @@ final class ClusterManager
                 $lastTopologyHash = null;
             }
 
-            sleep(1);
+            $this->pauseChaos(1.0);
+
+            if ($this->chaosWatchStopped()) {
+                return $event->withStatus('abandoned', microtime(true), ['watch closed before the event settled']);
+            }
         }
 
         throw new RuntimeException(sprintf(
@@ -3020,13 +3068,87 @@ final class ClusterManager
         return $this->isReplicaRestartSatisfied($event, $view);
     }
 
-    private function emitChaosWatchLine(ChaosOptions $chaos, string $message): void
+    private function emitChaosWatchLine(ChaosOptions $chaos, ChaosWatchLogLevel $level, string $message): void
     {
-        if (!$chaos->watch && !str_starts_with($message, '[chaos]') && !str_starts_with($message, '[plan ]') && !str_starts_with($message, '[done ]')) {
+        $watch = $this->chaosWatch;
+        if ($watch instanceof ChaosWatchState) {
+            $watch->log($level, $message);
+            $this->chaosWatchTuiRenderer->render($watch);
+
             return;
         }
 
-        $this->output->info($message);
+        if (!$chaos->watch && $level->isVerbose()) {
+            return;
+        }
+
+        $this->output->info($level->plainPrefix() . $message);
+    }
+
+    /**
+     * Open the fullscreen chaos view when the run asked to watch and the
+     * terminal can host it. Everything the run would otherwise print is
+     * captured into the event log while the renderer owns the screen.
+     */
+    private function startChaosWatch(ChaosOptions $chaos, ChaosRuntimeState $runtime): ?ChaosWatchState
+    {
+        if (!$chaos->watch || !$this->chaosWatchTuiRenderer->supportsInteractiveWatch()) {
+            return null;
+        }
+
+        // Registered before the terminal is taken over so a failure part way
+        // through startup still tears the renderer back down.
+        $state = new ChaosWatchState($runtime, $chaos);
+        $this->chaosWatch = $state;
+        $this->chaosWatchTuiRenderer->start();
+        $this->output->redirectTo(function (ConsoleOutputLevel $level, string $message) use ($state): void {
+            $state->log(ChaosWatchLogLevel::fromConsoleOutputLevel($level), $message);
+            $this->chaosWatchTuiRenderer->render($state);
+        });
+        $this->chaosWatchTuiRenderer->render($state);
+
+        return $state;
+    }
+
+    private function stopChaosWatch(): void
+    {
+        if (!$this->chaosWatch instanceof ChaosWatchState) {
+            return;
+        }
+
+        $this->output->redirectTo(null);
+        $this->chaosWatch = null;
+        $this->chaosWatchTuiRenderer->stop();
+    }
+
+    private function chaosWatchStopped(): bool
+    {
+        return $this->chaosWatch?->quitRequested() === true;
+    }
+
+    /**
+     * Wait between chaos steps. While watching, the pause doubles as the input
+     * and redraw loop so the view stays responsive instead of freezing for the
+     * whole interval.
+     */
+    private function pauseChaos(float $seconds): void
+    {
+        $watch = $this->chaosWatch;
+        if ($watch instanceof ChaosWatchState) {
+            $this->chaosWatchTuiRenderer->pump($watch, $seconds);
+
+            return;
+        }
+
+        $wholeSeconds = (int) $seconds;
+        if ($wholeSeconds > 0) {
+            sleep($wholeSeconds);
+        }
+
+        $remainingMicroseconds = (int) round(($seconds - $wholeSeconds) * 1_000_000);
+        if ($remainingMicroseconds > 0) {
+            usleep($remainingMicroseconds);
+        }
     }
 
     private function formatNoEligibleChaosEventsLine(ChaosClusterView $view, ChaosOptions $chaos): string
@@ -3252,12 +3374,12 @@ final class ClusterManager
     private function sleepBetweenChaosSteps(ChaosOptions $chaos): void
     {
         if ($chaos->cooldownSeconds > 0) {
-            sleep($chaos->cooldownSeconds);
+            $this->pauseChaos((float) $chaos->cooldownSeconds);
         }
 
         $remainingInterval = max(0, $chaos->intervalSeconds - $chaos->cooldownSeconds);
         if ($remainingInterval > 0) {
-            sleep($remainingInterval);
+            $this->pauseChaos((float) $remainingInterval);
         }
     }
 

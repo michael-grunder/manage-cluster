@@ -363,7 +363,8 @@ Useful options:
 - `--max-events N` stops after N completed events
 - `--max-failures N` aborts after N consecutive execution or convergence failures
 - `--dry-run` prints the next planned event without mutating the cluster
-- `--watch` prints compact state and convergence progress
+- `--watch` opens a fullscreen `php-tui` view: live cluster topology on top,
+  the sequence of chaos events underneath (see below)
 - `--seed N` seeds the PRNG for reproducible event selection
 - `--wait-timeout SECONDS` bounds the post-event convergence wait
 - `--cooldown SECONDS` adds a quiet period after convergence
@@ -412,6 +413,27 @@ Two strategies decide which slots move where:
   chosen primary, and it may hand over every slot it owns. This deliberately
   produces fragmented, lopsided topologies, which is the point when testing how
   a client copes with them.
+
+### Watching a chaos run
+
+`--watch` replaces the line-by-line log with a fullscreen `php-tui` view:
+
+- the top pane tracks live topology, one row per primary with its replicas
+  underneath, showing slot ranges and slot counts, replica health per shard,
+  and the node the in-flight event is acting on
+- the bottom pane is the chaos event log: planned events, execution progress,
+  convergence polls, and failures, newest last
+- the header line carries run age, completed and failed event counts, overall
+  cluster health, and the allowed categories
+
+Controls: `j`/`k` or `Up`/`Down` scroll the event log, `PgUp`/`PgDn` page, `f`
+follows the newest entries again, and `q`, `Esc`, or `Ctrl-C` stops the run
+after the in-flight event finishes. Scrolling back holds its position while new
+events arrive.
+
+Watch mode needs a TTY on stdin and stdout. Redirecting output to a file or a
+pipe falls back to the line-by-line log, so `chaos 7000 --watch > chaos.log`
+still records a readable run.
 
 Slot migration only runs on a settled cluster: no `CLUSTERDOWN`, no degraded
 primaries, and no failed, loading, or syncing nodes. `--unsafe` skips that
