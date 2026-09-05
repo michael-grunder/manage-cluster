@@ -1493,25 +1493,33 @@ MESSAGE);
         );
     }
 
+    /**
+     * @param list<string> $expected
+     */
     #[DataProvider('chaosCategoryStartupLines')]
-    public function testChaosStartupLineShowsCategoriesAndNonNeutralWeights(
+    public function testChaosStartupEnumeratesOneCategoryPerLine(
         ChaosCategorySelection $categories,
-        string $expected,
+        array $expected,
     ): void {
         $manager = $this->newClusterManagerWithoutConstructor();
-        $method = new ReflectionClass($manager)->getMethod('formatChaosCategoriesLine');
+        $method = new ReflectionClass($manager)->getMethod('chaosCategoriesLines');
 
         self::assertSame($expected, $method->invoke($manager, $this->chaosOptions($categories)));
     }
 
     /**
-     * @return iterable<string, array{ChaosCategorySelection, string}>
+     * @return iterable<string, array{ChaosCategorySelection, list<string>}>
      */
     public static function chaosCategoryStartupLines(): iterable
     {
         yield 'defaults omit neutral weights' => [
             ChaosCategorySelection::fromCategories(ChaosOptions::DEFAULT_CATEGORIES),
-            'Chaos categories: replica-kill,replica-restart,replica-add',
+            [
+                'Chaos categories (3):',
+                '  replica-kill',
+                '  replica-restart',
+                '  replica-add',
+            ],
         ];
         yield 'weights are shown in --categories syntax' => [
             new ChaosCategorySelection([
@@ -1519,7 +1527,34 @@ MESSAGE);
                 ChaosOptions::CATEGORY_SLOT_MIGRATION => 3.0,
                 ChaosOptions::CATEGORY_REPLICA_ADD => 1.0,
             ]),
-            'Chaos categories: replica-kill:0.5,slot-migration:3,replica-add',
+            [
+                'Chaos categories (3):',
+                '  replica-kill:0.5',
+                '  slot-migration:3',
+                '  replica-add',
+            ],
+        ];
+        yield 'a single category still gets its own line' => [
+            ChaosCategorySelection::fromCategories([ChaosOptions::CATEGORY_SLOT_MIGRATION]),
+            [
+                'Chaos categories (1):',
+                '  slot-migration',
+            ],
+        ];
+        yield 'every category stays readable on a narrow terminal' => [
+            ChaosCategorySelection::fromCategories(ChaosOptions::SUPPORTED_CATEGORIES),
+            [
+                'Chaos categories (9):',
+                '  replica-kill',
+                '  replica-restart',
+                '  replica-remove',
+                '  replica-add',
+                '  replica-reparent',
+                '  primary-add',
+                '  primary-remove',
+                '  slot-migration',
+                '  primary-failover',
+            ],
         ];
     }
 }

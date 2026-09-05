@@ -119,9 +119,12 @@ final readonly class ChaosCategorySelection
     }
 
     /**
-     * Render back into `--categories` syntax, leaving neutral weights implicit.
+     * One `--categories` token per entry, with neutral weights left implicit,
+     * for callers that list the selection vertically rather than on one line.
+     *
+     * @return list<string>
      */
-    public function describe(): string
+    public function tokens(): array
     {
         $tokens = [];
         foreach ($this->weightByCategory as $category => $weight) {
@@ -130,7 +133,15 @@ final readonly class ChaosCategorySelection
                 : sprintf('%s:%s', $category, self::formatWeight($weight));
         }
 
-        return implode(',', $tokens);
+        return $tokens;
+    }
+
+    /**
+     * Render back into `--categories` syntax, leaving neutral weights implicit.
+     */
+    public function describe(): string
+    {
+        return implode(',', $this->tokens());
     }
 
     /**

@@ -1371,7 +1371,9 @@ final class ClusterManager
             // Announced after the watch takes over the terminal so the line
             // lands in the event log instead of being wiped by the TUI.
             $watch = $this->startChaosWatch($chaos, $runtime);
-            $this->output->info($this->formatChaosCategoriesLine($chaos));
+            foreach ($this->chaosCategoriesLines($chaos) as $line) {
+                $this->output->info($line);
+            }
             $this->runChaosLoop($options, $chaos, $runtime, $metadata, $seedPort, $tls, $caCert);
         } finally {
             $this->stopChaosWatch();
@@ -1387,13 +1389,24 @@ final class ClusterManager
     }
 
     /**
-     * Report the categories a run may pick from, in `--categories` syntax so
-     * weights other than the neutral 1 are visible and the line can be pasted
-     * back into another run.
+     * Report the categories a run may pick from, one per line in `--categories`
+     * token syntax so weights other than the neutral 1 are visible. The list is
+     * always vertical: joined onto one line it is truncated by the `--watch`
+     * log on a narrow terminal and wrapped mid-token without it, either of
+     * which hides the very thing the line exists to show.
+     *
+     * @return list<string>
      */
-    private function formatChaosCategoriesLine(ChaosOptions $chaos): string
+    private function chaosCategoriesLines(ChaosOptions $chaos): array
     {
-        return sprintf('Chaos categories: %s', $chaos->categories->describe());
+        $tokens = $chaos->categories->tokens();
+
+        $lines = [sprintf('Chaos categories (%d):', count($tokens))];
+        foreach ($tokens as $token) {
+            $lines[] = '  ' . $token;
+        }
+
+        return $lines;
     }
 
     /**

@@ -33,10 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decimals, may be attached to `all`, and are preserved for categories that are
   also enabled with `--allow-<category>`. `chaos --watch` shows the weights next
   to the category list.
-- `chaos` now prints the categories it may pick from when the run starts, in
-  `--categories` syntax so any non-default weight is visible, such as
-  `Chaos categories: replica-kill:0.5,replica-add,slot-migration:3`. With
-  `--watch` the line appears in the event log as well as the summary header.
+- `chaos` now prints the categories it may pick from when the run starts, one
+  per line under a `Chaos categories (N):` header and in `--categories` token
+  syntax so any non-default weight is visible, such as `replica-kill:0.5`. The
+  list is vertical so it stays readable at any terminal width, rather than being
+  truncated by the `--watch` log or wrapped mid-token without it. With `--watch`
+  each line becomes its own event log entry, and the summary header keeps
+  showing the comma-separated list.
 - `chaos --abort-on-failure` stops the run at the first failed event, for
   scripted runs that want a failure to be fatal.
 - An opt-in integration suite, `vendor/bin/phpunit --testsuite integration`,

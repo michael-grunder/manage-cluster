@@ -147,4 +147,16 @@ final class ChaosCategorySelectionTest extends TestCase
         yield 'infinite' => [INF];
         yield 'not a number' => [NAN];
     }
+
+    public function testTokensAreTheDescribeTokensOnePerEntry(): void
+    {
+        $selection = new ChaosCategorySelection([
+            ChaosOptions::CATEGORY_REPLICA_KILL => 0.5,
+            ChaosOptions::CATEGORY_SLOT_MIGRATION => 3.0,
+            ChaosOptions::CATEGORY_REPLICA_ADD => 1.0,
+        ]);
+
+        self::assertSame(['replica-kill:0.5', 'slot-migration:3', 'replica-add'], $selection->tokens());
+        self::assertSame($selection->describe(), implode(',', $selection->tokens()));
+    }
 }
