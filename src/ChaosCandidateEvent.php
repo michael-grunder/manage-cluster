@@ -18,6 +18,7 @@ final readonly class ChaosCandidateEvent
         public string $postcondition,
         public array $reasons,
         public ?SlotMigrationPlan $slotMigrationPlan = null,
+        public ?PrimaryFailoverPlan $primaryFailoverPlan = null,
     ) {
     }
 }

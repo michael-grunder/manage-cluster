@@ -103,7 +103,7 @@ final class CommandLineParser
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'chaos' => [
-            ['--categories LIST', 'Allowed events: replica-kill,replica-restart,replica-remove,replica-add,slot-migration'],
+            ['--categories LIST', 'Allowed events: replica-kill,replica-restart,replica-remove,replica-add,slot-migration,primary-failover'],
             ['--interval SECONDS', 'Minimum time between completed chaos steps (default: 8)'],
             ['--max-events N', 'Stop after N completed events (default: unlimited)'],
             ['--max-failures N', 'Abort after N consecutive failures (default: 5)'],
@@ -113,6 +113,7 @@ final class CommandLineParser
             ['--wait-timeout SECONDS', 'Maximum wait for event convergence (default: 60)'],
             ['--cooldown SECONDS', 'Quiet period after convergence (default: 2)'],
             ['--allow-slot-migration', 'Add slot-migration to the allowed event categories'],
+            ['--allow-primary-failover', 'Add primary-failover to the allowed event categories'],
             ['--slot-strategy NAME', 'Slot migration strategy: balanced (default) or random'],
             ['--slot-batch N', 'Maximum slots moved per slot-migration event (default: 16)'],
             ['--unsafe', 'Permit lower-redundancy actions normally avoided'],
@@ -190,6 +191,8 @@ final class CommandLineParser
             'chaos 7000 --dry-run',
             'chaos 7000 --allow-slot-migration --slot-batch 32',
             'chaos 7000 --categories slot-migration --slot-strategy random',
+            'chaos 7000 --allow-primary-failover',
+            'chaos 7000 --categories primary-failover --watch',
         ],
         'completions' => [
             'completions bash',
@@ -221,14 +224,16 @@ final class CommandLineParser
             '--all is scoped to failed replicas only; healthy replicas are left running.',
         ],
         'chaos' => [
-            'v1 executes replica kill, restart, and add plus bounded slot migration.',
+            'chaos executes replica kill, restart, and add plus bounded slot migration and coordinated primary failover.',
             'When --dry-run is used without --max-events, the command prints one planned event and exits.',
             'slot-migration is opt-in through --categories or --allow-slot-migration.',
+            'primary-failover is opt-in through --categories or --allow-primary-failover and promotes a caught-up replica with CLUSTER FAILOVER.',
             '--slot-strategy balanced keeps ownership even; random ignores the distribution and fragments it.',
             'replica-remove is parsed but remains disabled in conservative v1 selection.',
         ],
     ];
 
+    private const int DEFAULT_OPTION_COLUMN_WIDTH = 24;
     private const int DEFAULT_FILL_MEMBERS = 8;
     private const int DEFAULT_FILL_MEMBER_SIZE = 256;
     private const int DEFAULT_FILL_TARGET_KEYS = 5000;
@@ -286,6 +291,7 @@ final class CommandLineParser
         $chaosWaitTimeout = 60;
         $chaosCooldown = 2;
         $chaosAllowSlotMigration = false;
+        $chaosAllowPrimaryFailover = false;
         $chaosSlotStrategy = SlotMigrationStrategy::Balanced;
         $chaosSlotStrategyProvided = false;
         $chaosSlotBatch = ChaosOptions::DEFAULT_SLOT_MIGRATION_BATCH;
@@ -422,6 +428,10 @@ final class CommandLineParser
 
                 case '--allow-slot-migration':
                     $chaosAllowSlotMigration = true;
+                    break;
+
+                case '--allow-primary-failover':
+                    $chaosAllowPrimaryFailover = true;
                     break;
 
                 case '--slot-strategy':
@@ -639,6 +649,10 @@ final class CommandLineParser
             throw new InvalidArgumentException('--allow-slot-migration can only be used with chaos.');
         }
 
+        if ($action !== 'chaos' && $chaosAllowPrimaryFailover) {
+            throw new InvalidArgumentException('--allow-primary-failover can only be used with chaos.');
+        }
+
         if ($action !== 'chaos' && $chaosSlotStrategyProvided) {
             throw new InvalidArgumentException('--slot-strategy can only be used with chaos.');
         }
@@ -796,6 +810,10 @@ final class CommandLineParser
             $chaosCategories = [...$chaosCategories, ChaosOptions::CATEGORY_SLOT_MIGRATION];
         }
 
+        if ($chaosAllowPrimaryFailover && !in_array(ChaosOptions::CATEGORY_PRIMARY_FAILOVER, $chaosCategories, true)) {
+            $chaosCategories = [...$chaosCategories, ChaosOptions::CATEGORY_PRIMARY_FAILOVER];
+        }
+
         $chaosOptions = null;
         if ($action === 'chaos') {
             $chaosOptions = new ChaosOptions(
@@ -809,6 +827,7 @@ final class CommandLineParser
                 waitTimeoutSeconds: $chaosWaitTimeout,
                 cooldownSeconds: $chaosCooldown,
                 allowSlotMigration: $chaosAllowSlotMigration,
+                allowPrimaryFailover: $chaosAllowPrimaryFailover,
                 unsafe: $chaosUnsafe,
                 slotMigrationStrategy: $chaosSlotStrategy,
                 slotMigrationBatch: $chaosSlotBatch,
@@ -933,11 +952,12 @@ final class CommandLineParser
             self::formatHeading('Options', $interactive) . ':',
         ];
 
+        $width = self::optionColumnWidth(self::COMMAND_OPTIONS[$action]);
         foreach (self::COMMAND_OPTIONS[$action] as [$option, $description]) {
-            $lines[] = self::formatAlignedRow($option, $description, $interactive);
+            $lines[] = self::formatAlignedRow($option, $description, $interactive, $width);
         }
 
-        $lines[] = self::formatAlignedRow('-h, --help', 'Print help for this command', $interactive);
+        $lines[] = self::formatAlignedRow('-h, --help', 'Print help for this command', $interactive, $width);
         $lines[] = '';
         $lines[] = self::formatHeading('Examples', $interactive) . ':';
         $lines = [...$lines, ...$this->renderExamples(self::COMMAND_EXAMPLES[$action])];
@@ -1304,7 +1324,23 @@ final class CommandLineParser
         return $interactive ? sprintf("\033[1m%s\033[0m", $text) : $text;
     }
 
-    private static function formatAlignedRow(string $left, string $right, bool $interactive, int $width = 24): string
+    /**
+     * Keep every description in one command's help aligned, even when an option
+     * name is wider than the default column.
+     *
+     * @param list<array{0:string,1:string}> $options
+     */
+    private static function optionColumnWidth(array $options): int
+    {
+        $width = self::DEFAULT_OPTION_COLUMN_WIDTH;
+        foreach ($options as [$option]) {
+            $width = max($width, strlen($option) + 2);
+        }
+
+        return $width;
+    }
+
+    private static function formatAlignedRow(string $left, string $right, bool $interactive, int $width = self::DEFAULT_OPTION_COLUMN_WIDTH): string
     {
         $plainLeft = $left;
         $formattedLeft = $interactive ? sprintf("\033[36m%s\033[0m", $left) : $left;

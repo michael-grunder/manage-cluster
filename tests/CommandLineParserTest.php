@@ -924,6 +924,47 @@ final class CommandLineParserTest extends TestCase
         self::assertSame(['slot-migration'], $options->chaos->categories);
     }
 
+    public function testAllowPrimaryFailoverAddsTheCategoryToTheDefaults(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'chaos', '7000', '--allow-primary-failover']);
+
+        self::assertNotNull($options->chaos);
+        self::assertTrue($options->chaos->allowPrimaryFailover);
+        self::assertSame(
+            ['replica-kill', 'replica-restart', 'replica-add', 'primary-failover'],
+            $options->chaos->categories,
+        );
+    }
+
+    public function testAllowPrimaryFailoverDoesNotDuplicateAnExplicitCategory(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse([
+            'bin/manage-cluster',
+            'chaos',
+            '7000',
+            '--categories',
+            'primary-failover',
+            '--allow-primary-failover',
+        ]);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame(['primary-failover'], $options->chaos->categories);
+    }
+
+    public function testAllowPrimaryFailoverRequiresChaos(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--allow-primary-failover can only be used with chaos.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--allow-primary-failover']);
+    }
+
     public function testChaosRejectsUnknownSlotStrategy(): void
     {
         $parser = new CommandLineParser();

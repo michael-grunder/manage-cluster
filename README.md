@@ -23,9 +23,9 @@ cluster management.
 - Kill an interactively selected primary/replica or a specific replica port.
 - Interactively add a replica to a selected primary.
 - Restart an interactively selected failed replica or a specific failed replica port from saved node metadata.
-- Run serialized chaos loops that kill, restart, and add replicas and migrate
-  slots between primaries, waiting for the cluster to converge between each
-  step.
+- Run serialized chaos loops that kill, restart, and add replicas, migrate slots
+  between primaries, and fail primaries over to their replicas, waiting for the
+  cluster to converge between each step.
 - Generate shell completion scripts for supported shells.
 - Start TLS-only local clusters with ephemeral certificates.
 - Generate a standalone startup shell script instead of starting immediately.
@@ -342,12 +342,15 @@ bin/manage-cluster chaos 7000 --interval 8 --watch
 bin/manage-cluster chaos 7000 --dry-run
 bin/manage-cluster chaos 7000 --allow-slot-migration --slot-batch 32
 bin/manage-cluster chaos 7000 --categories slot-migration --slot-strategy random
+bin/manage-cluster chaos 7000 --allow-primary-failover
+bin/manage-cluster chaos 7000 --categories primary-failover --watch
 ```
 
 Useful options:
 
 - `--categories LIST` limits event selection to `replica-kill`,
-  `replica-restart`, `replica-remove`, `replica-add`, and `slot-migration`
+  `replica-restart`, `replica-remove`, `replica-add`, `slot-migration`, and
+  `primary-failover`
 - `--interval SECONDS` sets the minimum time between completed steps
 - `--max-events N` stops after N completed events
 - `--max-failures N` aborts after N consecutive execution or convergence failures
@@ -358,16 +361,18 @@ Useful options:
 - `--cooldown SECONDS` adds a quiet period after convergence
 - `--allow-slot-migration` adds `slot-migration` to the allowed categories
   without having to restate the replica categories
+- `--allow-primary-failover` adds `primary-failover` to the allowed categories
+  without having to restate the replica categories
 - `--slot-strategy NAME` picks `balanced` (default) or `random` slot selection
 - `--slot-batch N` bounds how many slots one migration event moves (default: 16)
 - `--unsafe` allows lower-redundancy actions that are otherwise skipped
 
 Behavior notes:
 
-- v1 actively executes `replica-kill`, `replica-restart`, `replica-add`, and
-  `slot-migration`
+- `chaos` actively executes `replica-kill`, `replica-restart`, `replica-add`,
+  `slot-migration`, and `primary-failover`
 - `replica-remove` is parsed for forward compatibility but remains disabled by
-  the conservative v1 planner
+  the conservative planner
 - The loop keeps in-memory runtime history so follow-up actions can repair or
   extend earlier replica churn instead of choosing stateless random actions
 - Only one mutation is in flight at a time, and each event must satisfy a
@@ -404,6 +409,38 @@ conditions. `--seed N` makes both event selection and slot planning reproducible
 Migrating slots fragments ownership, so `status` reports each primary's slot
 ranges as a comma-separated list, and a primary that has given away every slot
 is still listed with `[-]`.
+
+#### Primary failover
+
+`primary-failover` is off by default. Enable it with `--allow-primary-failover`,
+or name it in `--categories`. Each event sends a coordinated `CLUSTER FAILOVER`
+to a replica, which swaps the shard's writable endpoint without stopping any
+process: the replica is promoted and its old primary comes back as a replica of
+the node that replaced it. It is the cheapest way to make a client refresh a
+shard's routing, notice role changes on connections it already holds, and retry
+writes that were aimed at the old primary.
+
+A shard is only chosen when the promotion has a realistic chance of completing:
+
+- the primary is managed, reachable, owns slots, and is not already failing over
+- the replica is managed, attached to that primary, reachable, not loading or
+  syncing, and reports `master_link_status:up`
+- the replica is caught up within 1 MiB of its primary's replication offset
+- at least three primaries own slots and a majority of them are reachable, since
+  a normal failover needs their authorization
+
+`CLUSTER FAILOVER` only acknowledges that the promotion was scheduled, so the
+event is not complete until the promoted node owns every slot the old primary
+had and the old primary has resynchronized as its replica. A failover that never
+converges fails the event; chaos never escalates it to `FORCE` or `TAKEOVER`.
+
+Unlike `slot-migration`, failover does not require the whole cluster to be
+settled, so it can run in the same loop as replica churn. It is blocked while
+`CLUSTERDOWN` is reported, and, without `--unsafe`, while any primary is
+unreachable or failed or any node is still handshaking. Over a run, chaos holds
+the new roles for a while instead of failing straight back, then prefers
+promoting a primary it demoted earlier so role reversals and connection reuse
+both get exercised.
 
 ### `help`
 

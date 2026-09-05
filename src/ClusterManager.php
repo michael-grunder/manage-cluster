@@ -30,6 +30,8 @@ final class ClusterManager
         private readonly ClusterTreeSelector $clusterTreeSelector,
         private readonly SlotMigrationEligibility $slotMigrationEligibility,
         private readonly SlotMigrationPlanner $slotMigrationPlanner,
+        private readonly PrimaryFailoverEligibility $primaryFailoverEligibility,
+        private readonly PrimaryFailoverPlanner $primaryFailoverPlanner,
         private readonly SlotMigrator $slotMigrator,
         private readonly ConsoleOutput $output,
     ) {
@@ -1314,10 +1316,11 @@ final class ClusterManager
             ChaosOptions::CATEGORY_REPLICA_RESTART,
             ChaosOptions::CATEGORY_REPLICA_ADD,
             ChaosOptions::CATEGORY_SLOT_MIGRATION,
+            ChaosOptions::CATEGORY_PRIMARY_FAILOVER,
         ];
 
         if (array_intersect($chaos->categories, $implementedCategories) === []) {
-            throw new RuntimeException('chaos v1 currently implements replica-kill, replica-restart, replica-add, and slot-migration.');
+            throw new RuntimeException('chaos currently implements replica-kill, replica-restart, replica-add, slot-migration, and primary-failover.');
         }
 
         if ($chaos->seed !== null) {
@@ -1889,6 +1892,12 @@ final class ClusterManager
             }
         }
 
+        if (in_array(ChaosOptions::CATEGORY_PRIMARY_FAILOVER, $chaos->categories, true)) {
+            foreach ($this->buildPrimaryFailoverCandidates($view, $runtime, $chaos) as $failover) {
+                $candidates[] = $failover;
+            }
+        }
+
         if ($candidates === []) {
             return null;
         }
@@ -1975,6 +1984,78 @@ final class ClusterManager
             reasons: $reasons,
             slotMigrationPlan: $plan,
         );
+    }
+
+    /**
+     * Coordinated failover promotes a caught-up replica over its own primary,
+     * so the whole shard's writable endpoint changes without any node dying.
+     * Candidates come from the pure planner; the scoring here only encodes how
+     * chaos wants to sequence them across a run.
+     *
+     * @return list<ChaosCandidateEvent>
+     */
+    private function buildPrimaryFailoverCandidates(
+        ChaosClusterView $view,
+        ChaosRuntimeState $runtime,
+        ChaosOptions $chaos,
+    ): array {
+        if ($this->primaryFailoverEligibility->blockers($view, $chaos->unsafe) !== []) {
+            return [];
+        }
+
+        $candidates = [];
+        foreach ($this->primaryFailoverPlanner->candidates($view) as $plan) {
+            $score = 3;
+            $reasons = [sprintf(
+                'replica %d is attached to primary %d with %s of replication lag',
+                $plan->replicaPort,
+                $plan->primaryPort,
+                $plan->describeLag(),
+            )];
+
+            $primary = $view->primaryStateByPort[$plan->primaryPort] ?? null;
+            if ($primary instanceof ChaosPrimaryState && $primary->healthyReplicaCount >= 2) {
+                $score += 1;
+                $reasons[] = 'the shard keeps another healthy replica after the promotion';
+            }
+
+            if ($runtime->lastEventTargeted(ChaosOptions::CATEGORY_PRIMARY_FAILOVER, $plan->primaryPort)) {
+                // The previous event promoted this primary; hold the new roles
+                // for a while instead of immediately failing back.
+                $score -= 3;
+                $reasons[] = 'the previous event promoted this primary, so failing back is deprioritized';
+            } elseif ($this->wasDemotedByChaosFailover($runtime, $plan->replicaPort)) {
+                $score += 2;
+                $reasons[] = 'restores a primary chaos demoted earlier, exercising role reversal';
+            }
+
+            $candidates[] = new ChaosCandidateEvent(
+                category: ChaosOptions::CATEGORY_PRIMARY_FAILOVER,
+                targetPort: $plan->replicaPort,
+                targetPrimaryPort: $plan->primaryPort,
+                score: $score,
+                summary: $plan->summary(),
+                postcondition: $plan->postcondition(),
+                reasons: $reasons,
+                primaryFailoverPlan: $plan,
+            );
+        }
+
+        return $candidates;
+    }
+
+    private function wasDemotedByChaosFailover(ChaosRuntimeState $runtime, int $port): bool
+    {
+        foreach ($runtime->history as $event) {
+            if ($event->category === ChaosOptions::CATEGORY_PRIMARY_FAILOVER
+                && $event->status === 'completed'
+                && $event->targetPrimaryPort === $port
+            ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -2068,6 +2149,25 @@ final class ClusterManager
                 );
                 break;
 
+            case ChaosOptions::CATEGORY_PRIMARY_FAILOVER:
+                $failoverPlan = $event->primaryFailoverPlan;
+                if (!$failoverPlan instanceof PrimaryFailoverPlan) {
+                    throw new RuntimeException('primary-failover is missing a failover plan.');
+                }
+
+                $this->output->step(sprintf(
+                    'Promoting replica %d over primary %d',
+                    $failoverPlan->replicaPort,
+                    $failoverPlan->primaryPort,
+                ));
+
+                // CLUSTER FAILOVER only acknowledges that the promotion was
+                // scheduled, so the convergence wait decides whether it worked.
+                // A normal failover that never completes must never escalate
+                // into FORCE or TAKEOVER on its own.
+                $this->redisNodeClient->clusterFailover($failoverPlan->replicaPort, $tls, $caCert);
+                break;
+
             default:
                 throw new RuntimeException(sprintf('Unsupported chaos event category: %s', $event->category));
         }
@@ -2132,6 +2232,7 @@ final class ClusterManager
             ChaosOptions::CATEGORY_REPLICA_RESTART => $this->isReplicaRestartSatisfied($event, $view),
             ChaosOptions::CATEGORY_REPLICA_ADD => $this->isReplicaAddSatisfied($event, $view),
             ChaosOptions::CATEGORY_SLOT_MIGRATION => $this->isSlotMigrationSatisfied($event, $view),
+            ChaosOptions::CATEGORY_PRIMARY_FAILOVER => $this->isPrimaryFailoverSatisfied($event, $view),
             default => false,
         };
     }
@@ -2160,6 +2261,45 @@ final class ClusterManager
         }
 
         return true;
+    }
+
+    /**
+     * A failover is only done when the promotion and the demotion have both
+     * landed: the promoted node serves every slot the old primary owned, and
+     * the old primary is back as a replica of the node that replaced it.
+     */
+    private function isPrimaryFailoverSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
+    {
+        $plan = $event->primaryFailoverPlan;
+        if (!$plan instanceof PrimaryFailoverPlan || $view->clusterDown) {
+            return false;
+        }
+
+        $promoted = $view->primaryStateByPort[$plan->replicaPort] ?? null;
+        if (!$promoted instanceof ChaosPrimaryState || !$promoted->reachable) {
+            return false;
+        }
+
+        if ($plan->replicaNodeId !== '' && $promoted->nodeId !== $plan->replicaNodeId) {
+            return false;
+        }
+
+        foreach ($plan->slots() as $slot) {
+            if (!$promoted->ownsSlot($slot)) {
+                return false;
+            }
+        }
+
+        $demoted = $view->nodeStateByPort[$plan->primaryPort] ?? null;
+        if (!$demoted instanceof ChaosNodeState) {
+            return false;
+        }
+
+        return $demoted->role === 'replica'
+            && $demoted->primaryPort === $plan->replicaPort
+            && $demoted->reachable
+            && !$demoted->isFailed
+            && !$demoted->isSyncing;
     }
 
     private function isReplicaKillSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
@@ -2208,16 +2348,31 @@ final class ClusterManager
 
     private function formatNoEligibleChaosEventsLine(ChaosClusterView $view, ChaosOptions $chaos): string
     {
-        if (!in_array(ChaosOptions::CATEGORY_SLOT_MIGRATION, $chaos->categories, true)) {
+        $lines = [];
+
+        if (in_array(ChaosOptions::CATEGORY_SLOT_MIGRATION, $chaos->categories, true)) {
+            $blockers = $this->slotMigrationEligibility->blockers($view, $chaos->unsafe);
+            if ($blockers === []) {
+                $blockers[] = 'no legal slot source and destination';
+            }
+
+            $lines[] = sprintf('slot-migration blocked: %s', implode('; ', $blockers));
+        }
+
+        if (in_array(ChaosOptions::CATEGORY_PRIMARY_FAILOVER, $chaos->categories, true)) {
+            $blockers = $this->primaryFailoverEligibility->blockers($view, $chaos->unsafe);
+            if ($blockers === []) {
+                $blockers[] = 'no caught-up managed replica to promote';
+            }
+
+            $lines[] = sprintf('primary-failover blocked: %s', implode('; ', $blockers));
+        }
+
+        if ($lines === []) {
             return '[wait ] no eligible events';
         }
 
-        $blockers = $this->slotMigrationEligibility->blockers($view, $chaos->unsafe);
-        if ($blockers === []) {
-            $blockers[] = 'no legal slot source and destination';
-        }
-
-        return sprintf('[wait ] slot-migration blocked: %s', implode('; ', $blockers));
+        return sprintf('[wait ] %s', implode(' | ', $lines));
     }
 
     private function formatChaosWaitLine(ChaosEventRecord $event, ChaosClusterView $view): string
@@ -2225,6 +2380,11 @@ final class ClusterManager
         $plan = $event->slotMigrationPlan;
         if ($event->category === ChaosOptions::CATEGORY_SLOT_MIGRATION && $plan instanceof SlotMigrationPlan) {
             return $this->formatSlotMigrationWaitLine($event->id, $plan, $view);
+        }
+
+        $failoverPlan = $event->primaryFailoverPlan;
+        if ($event->category === ChaosOptions::CATEGORY_PRIMARY_FAILOVER && $failoverPlan instanceof PrimaryFailoverPlan) {
+            return $this->formatPrimaryFailoverWaitLine($event->id, $failoverPlan, $view);
         }
 
         $target = $event->targetPort !== null ? ($view->nodeStateByPort[$event->targetPort] ?? null) : null;
@@ -2242,6 +2402,25 @@ final class ClusterManager
             $event->targetPrimaryPort !== null ? (string) $event->targetPrimaryPort : '-',
             $primaryHealthy,
             $view->degradedPrimaryPorts === [] ? '-' : implode(',', array_map('strval', $view->degradedPrimaryPorts)),
+        );
+    }
+
+    private function formatPrimaryFailoverWaitLine(int $eventId, PrimaryFailoverPlan $plan, ChaosClusterView $view): string
+    {
+        $promoted = $view->nodeStateByPort[$plan->replicaPort] ?? null;
+        $demoted = $view->nodeStateByPort[$plan->primaryPort] ?? null;
+        $promotedSlots = $view->primaryStateByPort[$plan->replicaPort] ?? null;
+
+        return sprintf(
+            '[wait ] event#%d promote=%d role=%s slots=%s demote=%d role=%s follows=%s cluster=%s',
+            $eventId,
+            $plan->replicaPort,
+            $promoted instanceof ChaosNodeState ? $promoted->role : 'unknown',
+            $promotedSlots instanceof ChaosPrimaryState ? SlotRange::format($promotedSlots->slotRanges) : '-',
+            $plan->primaryPort,
+            $demoted instanceof ChaosNodeState ? $demoted->role : 'unknown',
+            $demoted instanceof ChaosNodeState && $demoted->primaryPort !== null ? (string) $demoted->primaryPort : '-',
+            $view->clusterDown ? 'down' : 'ok',
         );
     }
 
@@ -2353,6 +2532,14 @@ final class ClusterManager
                 || ($linkStatus !== '' && $linkStatus !== 'up')
             );
 
+        // Replicas report how far they have processed separately from the
+        // stream offset they have received, and a failover must not start from
+        // the optimistic number.
+        $replicationOffset = $role === 'replica'
+            ? $this->readInfoInt($info, 'slave_repl_offset') ?? $this->readInfoInt($info, 'slave_read_repl_offset')
+            : $this->readInfoInt($info, 'master_repl_offset');
+        $failoverState = $this->readInfoString($info, 'master_failover_state');
+
         return new ChaosNodeState(
             port: $port,
             nodeId: $nodeId,
@@ -2369,6 +2556,8 @@ final class ClusterManager
             pid: $clusterDir !== null ? $this->readNodePid($clusterDir, $port) : null,
             managed: $managed,
             health: $health,
+            replicationOffset: $replicationOffset,
+            failoverInProgress: $failoverState !== '' && $failoverState !== 'no-failover',
         );
     }
 
@@ -2428,6 +2617,23 @@ final class ClusterManager
         $value = $info[$key] ?? null;
 
         return is_string($value) ? $value : '';
+    }
+
+    /**
+     * @param array<string, mixed>|null $info
+     */
+    private function readInfoInt(?array $info, string $key): ?int
+    {
+        $value = $info[$key] ?? null;
+        if (is_int($value)) {
+            return $value;
+        }
+
+        if (is_string($value) && preg_match('/^-?\d+$/', trim($value)) === 1) {
+            return (int) trim($value);
+        }
+
+        return null;
     }
 
     /**

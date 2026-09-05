@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identifies the exact blocking conditions and ports.
 
 ### Changed
+- Command help now widens the option column to fit the longest option name, so
+  descriptions stay aligned for commands with long options such as
+  `chaos --allow-primary-failover`.
 - Help, usage, and error output now name the command as it was invoked instead
   of always printing `bin/manage-cluster`. A PHAR or script resolved through
   `PATH` prints `manage-cluster`, a command inside the current directory prints
@@ -29,6 +32,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `[-]` in the slot column, instead of disappearing from the topology.
 
 ### Added
+- Added `chaos --categories primary-failover` (also enabled with
+  `chaos --allow-primary-failover`), which promotes a caught-up replica over its
+  own primary with a coordinated `CLUSTER FAILOVER` and waits until the promoted
+  node owns every slot the old primary had and the old primary has
+  resynchronized as its replica. A shard is only chosen when the primary is
+  managed, reachable, and owns slots, the replica is attached with its
+  replication link up and within 1 MiB of the primary's offset, and a majority
+  of slot-owning primaries is reachable to authorize the promotion. A failover
+  that does not converge fails the event and is never escalated to
+  `CLUSTER FAILOVER FORCE` or `TAKEOVER`. Unlike `slot-migration`, failover can
+  run alongside replica churn, and `--watch` reports the promotion, demotion,
+  and slot handover as they land.
 - Added a `chaos` client stress report reviewing current coverage and proposing
   failover, replica reassignment, staged migration, and recovery improvements.
 - Added working `chaos --categories slot-migration`, which moves a bounded batch

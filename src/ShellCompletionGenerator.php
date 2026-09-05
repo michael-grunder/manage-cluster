@@ -41,6 +41,7 @@ final class ShellCompletionGenerator
         $globalOptions = $this->bashWords($this->optionNames(CommandLineParser::globalOptionSpecs()));
         $shells = $this->bashWords(self::SUPPORTED_SHELLS);
         $slotStrategies = $this->bashWords(SlotMigrationStrategy::names());
+        $chaosCategories = $this->bashWords(ChaosOptions::SUPPORTED_CATEGORIES);
         $commandPattern = implode('|', [...CommandLineParser::actionNames(), 'help']);
         $optionCases = $this->bashOptionCases();
 
@@ -68,7 +69,7 @@ _{$functionName}()
             return 0
             ;;
         --categories)
-            COMPREPLY=( \$(compgen -W "replica-kill replica-restart replica-remove replica-add slot-migration" -- "\$cur") )
+            COMPREPLY=( \$(compgen -W "{$chaosCategories}" -- "\$cur") )
             return 0
             ;;
         --slot-strategy)

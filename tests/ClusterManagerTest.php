@@ -4,9 +4,19 @@ declare(strict_types=1);
 
 namespace Mgrunder\CreateCluster\Tests;
 
+use Mgrunder\CreateCluster\ChaosCandidateEvent;
+use Mgrunder\CreateCluster\ChaosClusterView;
+use Mgrunder\CreateCluster\ChaosEventRecord;
+use Mgrunder\CreateCluster\ChaosNodeState;
+use Mgrunder\CreateCluster\ChaosOptions;
+use Mgrunder\CreateCluster\ChaosPrimaryState;
+use Mgrunder\CreateCluster\ChaosRuntimeState;
 use Mgrunder\CreateCluster\ClusterManager;
 use Mgrunder\CreateCluster\ClusterNodeStatus;
 use Mgrunder\CreateCluster\ClusterShardStatus;
+use Mgrunder\CreateCluster\PrimaryFailoverEligibility;
+use Mgrunder\CreateCluster\PrimaryFailoverPlan;
+use Mgrunder\CreateCluster\PrimaryFailoverPlanner;
 use Mgrunder\CreateCluster\SlotRange;
 use Mgrunder\CreateCluster\PortRangeFormatter;
 use Mgrunder\CreateCluster\ReplicaTarget;
@@ -364,6 +374,324 @@ MESSAGE);
         }
 
         self::assertTrue(rmdir($dir));
+    }
+
+
+    public function testPrimaryFailoverConvergesOnlyWhenTheShardFullyReversesRoles(): void
+    {
+        $event = $this->primaryFailoverEvent();
+
+        $view = $this->failoverView(
+            promotedRanges: [new SlotRange(0, 5461)],
+            demotedRole: 'replica',
+            demotedPrimaryPort: 7003,
+        );
+
+        self::assertTrue($this->invokeIsPrimaryFailoverSatisfied($event, $view));
+    }
+
+    /**
+     * @param array{promotedRanges?: list<SlotRange>, promotedNodeId?: string, promotedReachable?: bool, demotedRole?: string, demotedPrimaryPort?: int|null, demotedSyncing?: bool, demotedReachable?: bool, clusterDown?: bool, dropPromotedPrimary?: bool} $overrides
+     */
+    #[DataProvider('unfinishedPrimaryFailoverProvider')]
+    public function testPrimaryFailoverIsUnfinishedUntilTheWholeShardAgrees(array $overrides): void
+    {
+        $view = $this->failoverView(
+            promotedRanges: $overrides['promotedRanges'] ?? [new SlotRange(0, 5461)],
+            demotedRole: $overrides['demotedRole'] ?? 'replica',
+            demotedPrimaryPort: array_key_exists('demotedPrimaryPort', $overrides) ? $overrides['demotedPrimaryPort'] : 7003,
+            promotedNodeId: $overrides['promotedNodeId'] ?? 'node-7003',
+            promotedReachable: $overrides['promotedReachable'] ?? true,
+            demotedSyncing: $overrides['demotedSyncing'] ?? false,
+            demotedReachable: $overrides['demotedReachable'] ?? true,
+            clusterDown: $overrides['clusterDown'] ?? false,
+            dropPromotedPrimary: $overrides['dropPromotedPrimary'] ?? false,
+        );
+
+        self::assertFalse($this->invokeIsPrimaryFailoverSatisfied($this->primaryFailoverEvent(), $view));
+    }
+
+    /**
+     * @return iterable<string, array{overrides: array<string, mixed>}>
+     */
+    public static function unfinishedPrimaryFailoverProvider(): iterable
+    {
+        yield 'promotion has not happened yet' => ['overrides' => ['dropPromotedPrimary' => true]];
+        yield 'promoted node is unreachable' => ['overrides' => ['promotedReachable' => false]];
+        yield 'old primary still serves its role' => ['overrides' => ['demotedRole' => 'primary', 'demotedPrimaryPort' => null]];
+        yield 'old primary follows someone else' => ['overrides' => ['demotedPrimaryPort' => 7004]];
+        yield 'old primary is still resynchronizing' => ['overrides' => ['demotedSyncing' => true]];
+        yield 'old primary is unreachable' => ['overrides' => ['demotedReachable' => false]];
+        yield 'port came back with a new node id' => ['overrides' => ['promotedNodeId' => 'node-7003-restarted']];
+        yield 'promoted node owns only part of the slots' => ['overrides' => ['promotedRanges' => [new SlotRange(0, 2730)]]];
+        yield 'cluster is down' => ['overrides' => ['clusterDown' => true]];
+    }
+
+    public function testPrimaryFailoverPrefersRoleReversalAndDeprioritizesImmediateFailback(): void
+    {
+        $view = $this->chaosViewWithThreeShards();
+        $runtime = new ChaosRuntimeState(
+            clusterId: 'test-cluster',
+            seedPort: 7000,
+            startedAt: 0.0,
+            allowedCategories: [ChaosOptions::CATEGORY_PRIMARY_FAILOVER],
+        );
+
+        // An earlier completed failover promoted 7003 over 7000, so 7000 is now
+        // a replica of 7003 and promoting it back is the role-reversal case.
+        $runtime->rememberHistory(new ChaosEventRecord(
+            id: 1,
+            category: ChaosOptions::CATEGORY_PRIMARY_FAILOVER,
+            status: 'completed',
+            targetPort: 7003,
+            targetPrimaryPort: 7000,
+            startedAt: 0.0,
+            completedAt: 1.0,
+            summary: 'primary-failover promote=7003 demote=7000',
+            postcondition: 'promoted',
+        ));
+
+        $scores = $this->invokePrimaryFailoverCandidateScores($view, $runtime);
+
+        // 7000 was demoted by chaos, but promoting it back right now would undo
+        // the previous event, so the failback is the least attractive option.
+        self::assertSame([7005 => 3, 7006 => 3, 7000 => 0], $scores);
+
+        $runtime->rememberHistory(new ChaosEventRecord(
+            id: 2,
+            category: ChaosOptions::CATEGORY_SLOT_MIGRATION,
+            status: 'completed',
+            targetPort: 7002,
+            targetPrimaryPort: 7001,
+            startedAt: 1.0,
+            completedAt: 2.0,
+            summary: 'slot-migration',
+            postcondition: 'moved',
+        ));
+
+        self::assertSame([7005 => 3, 7006 => 3, 7000 => 5], $this->invokePrimaryFailoverCandidateScores($view, $runtime));
+    }
+
+    public function testPrimaryFailoverCandidatesAreEmptyWhileTheClusterBlocksFailover(): void
+    {
+        $view = $this->chaosViewWithThreeShards(clusterDown: true);
+        $runtime = new ChaosRuntimeState(
+            clusterId: 'test-cluster',
+            seedPort: 7000,
+            startedAt: 0.0,
+            allowedCategories: [ChaosOptions::CATEGORY_PRIMARY_FAILOVER],
+        );
+
+        self::assertSame([], $this->invokePrimaryFailoverCandidateScores($view, $runtime));
+    }
+
+    private function primaryFailoverEvent(): ChaosEventRecord
+    {
+        $plan = new PrimaryFailoverPlan(
+            primaryPort: 7000,
+            primaryNodeId: 'node-7000',
+            replicaPort: 7003,
+            replicaNodeId: 'node-7003',
+            ranges: [new SlotRange(0, 5461)],
+            replicationLagBytes: 0,
+        );
+
+        return new ChaosEventRecord(
+            id: 1,
+            category: ChaosOptions::CATEGORY_PRIMARY_FAILOVER,
+            status: 'waiting',
+            targetPort: $plan->replicaPort,
+            targetPrimaryPort: $plan->primaryPort,
+            startedAt: 0.0,
+            completedAt: null,
+            summary: $plan->summary(),
+            postcondition: $plan->postcondition(),
+            primaryFailoverPlan: $plan,
+        );
+    }
+
+    private function invokeIsPrimaryFailoverSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $method = new ReflectionClass($manager)->getMethod('isPrimaryFailoverSatisfied');
+
+        $satisfied = $method->invoke($manager, $event, $view);
+        self::assertIsBool($satisfied);
+
+        return $satisfied;
+    }
+
+    /**
+     * @return array<int, int> candidate score keyed by the replica chaos would promote
+     */
+    private function invokePrimaryFailoverCandidateScores(ChaosClusterView $view, ChaosRuntimeState $runtime): array
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $reflection->getProperty('primaryFailoverEligibility')->setValue($manager, new PrimaryFailoverEligibility());
+        $reflection->getProperty('primaryFailoverPlanner')->setValue($manager, new PrimaryFailoverPlanner());
+
+        $candidates = $reflection->getMethod('buildPrimaryFailoverCandidates')->invoke(
+            $manager,
+            $view,
+            $runtime,
+            $this->chaosOptions(),
+        );
+
+        self::assertIsArray($candidates);
+
+        $scores = [];
+        foreach ($candidates as $candidate) {
+            self::assertInstanceOf(ChaosCandidateEvent::class, $candidate);
+            self::assertNotNull($candidate->targetPort);
+            $scores[$candidate->targetPort] = $candidate->score;
+        }
+
+        return $scores;
+    }
+
+    private function chaosOptions(): ChaosOptions
+    {
+        return new ChaosOptions(
+            categories: [ChaosOptions::CATEGORY_PRIMARY_FAILOVER],
+            intervalSeconds: 8,
+            maxEvents: null,
+            maxFailures: 5,
+            dryRun: false,
+            watch: false,
+            seed: null,
+            waitTimeoutSeconds: 60,
+            cooldownSeconds: 2,
+            allowSlotMigration: false,
+            allowPrimaryFailover: true,
+            unsafe: false,
+        );
+    }
+
+    /**
+     * Three settled shards where 7003 already leads the first shard with the
+     * demoted 7000 following it, so both a failback and untouched shards are
+     * available to the planner.
+     */
+    private function chaosViewWithThreeShards(bool $clusterDown = false): ChaosClusterView
+    {
+        $shards = [
+            7003 => ['range' => new SlotRange(0, 5461), 'replicas' => [7000]],
+            7001 => ['range' => new SlotRange(5462, 10922), 'replicas' => [7005]],
+            7002 => ['range' => new SlotRange(10923, 16383), 'replicas' => [7006]],
+        ];
+
+        $nodeStateByPort = [];
+        $primaryStateByPort = [];
+        foreach ($shards as $primaryPort => $shard) {
+            $nodeStateByPort[$primaryPort] = $this->chaosNode($primaryPort, 'primary', slotRanges: [$shard['range']]);
+            foreach ($shard['replicas'] as $replicaPort) {
+                $nodeStateByPort[$replicaPort] = $this->chaosNode($replicaPort, 'replica', primaryPort: $primaryPort);
+            }
+
+            $primaryStateByPort[$primaryPort] = new ChaosPrimaryState(
+                port: $primaryPort,
+                nodeId: sprintf('node-%d', $primaryPort),
+                reachable: true,
+                slotRanges: [$shard['range']],
+                replicaPorts: $shard['replicas'],
+                healthyReplicaCount: count($shard['replicas']),
+                syncingReplicaCount: 0,
+                failedReplicaCount: 0,
+            );
+        }
+
+        return new ChaosClusterView(
+            clusterId: 'test-cluster',
+            seedPort: 7000,
+            topologyHash: 'hash',
+            clusterDown: $clusterDown,
+            broadlyHealthy: !$clusterDown,
+            nodeStateByPort: $nodeStateByPort,
+            primaryStateByPort: $primaryStateByPort,
+            replicaStateByPort: [],
+            degradedPrimaryPorts: [],
+        );
+    }
+
+    /**
+     * @param list<SlotRange> $promotedRanges
+     */
+    private function failoverView(
+        array $promotedRanges,
+        string $demotedRole,
+        ?int $demotedPrimaryPort,
+        string $promotedNodeId = 'node-7003',
+        bool $promotedReachable = true,
+        bool $demotedSyncing = false,
+        bool $demotedReachable = true,
+        bool $clusterDown = false,
+        bool $dropPromotedPrimary = false,
+    ): ChaosClusterView {
+        $promotedPrimary = new ChaosPrimaryState(
+            port: 7003,
+            nodeId: $promotedNodeId,
+            reachable: $promotedReachable,
+            slotRanges: $promotedRanges,
+            replicaPorts: [7000],
+            healthyReplicaCount: 1,
+            syncingReplicaCount: 0,
+            failedReplicaCount: 0,
+        );
+
+        return new ChaosClusterView(
+            clusterId: 'test-cluster',
+            seedPort: 7000,
+            topologyHash: 'hash',
+            clusterDown: $clusterDown,
+            broadlyHealthy: !$clusterDown,
+            nodeStateByPort: [
+                7000 => $this->chaosNode(
+                    7000,
+                    $demotedRole,
+                    primaryPort: $demotedPrimaryPort,
+                    reachable: $demotedReachable,
+                    syncing: $demotedSyncing,
+                    slotRanges: $demotedRole === 'primary' ? $promotedRanges : [],
+                ),
+                7003 => $this->chaosNode(7003, 'primary', slotRanges: $promotedRanges, nodeId: $promotedNodeId),
+            ],
+            primaryStateByPort: $dropPromotedPrimary ? [] : [7003 => $promotedPrimary],
+            replicaStateByPort: [],
+            degradedPrimaryPorts: [],
+        );
+    }
+
+    /**
+     * @param list<SlotRange> $slotRanges
+     */
+    private function chaosNode(
+        int $port,
+        string $role,
+        ?int $primaryPort = null,
+        bool $reachable = true,
+        bool $syncing = false,
+        array $slotRanges = [],
+        ?string $nodeId = null,
+    ): ChaosNodeState {
+        return new ChaosNodeState(
+            port: $port,
+            nodeId: $nodeId ?? sprintf('node-%d', $port),
+            role: $role,
+            primaryPort: $primaryPort,
+            knownByCluster: true,
+            reachable: $reachable,
+            isFailed: false,
+            isHandshake: false,
+            isLoading: false,
+            isSyncing: $syncing,
+            linkStatus: $role === 'replica' ? 'up' : '',
+            slotRanges: $slotRanges,
+            pid: null,
+            managed: true,
+            health: 'online',
+            replicationOffset: 1_000,
+        );
     }
 
     /**

@@ -41,6 +41,7 @@ chosen based on:
 `bin/manage-cluster chaos 7000 --watch`
 `bin/manage-cluster chaos 7000 --allow-slot-migration --slot-batch 32`
 `bin/manage-cluster chaos 7000 --categories slot-migration --slot-strategy random`
+`bin/manage-cluster chaos 7000 --allow-primary-failover`
 
 ### Options
 - `--categories LIST`
@@ -52,6 +53,7 @@ chosen based on:
   - `replica-remove`
   - `replica-add`
   - `slot-migration`
+  - `primary-failover`
 
   Default in v1:
   - `replica-kill,replica-restart,replica-add`
@@ -61,6 +63,9 @@ chosen based on:
     default in v1 if implementation is incomplete.
   - `slot-migration` is implemented and conservative, but stays out of the
     default set; enable it here or with `--allow-slot-migration`.
+  - `primary-failover` is implemented as a coordinated promotion only, and
+    stays out of the default set; enable it here or with
+    `--allow-primary-failover`.
 
 - `--interval SECONDS`
   Minimum time between completed chaos steps.
@@ -96,6 +101,10 @@ chosen based on:
 - `--allow-slot-migration`
   Explicit opt-in that adds `slot-migration` to the allowed categories, so the
   replica categories do not have to be restated in `--categories`.
+
+- `--allow-primary-failover`
+  Explicit opt-in that adds `primary-failover` to the allowed categories, so
+  the replica categories do not have to be restated in `--categories`.
 
 - `--slot-strategy balanced|random`
   How a slot-migration event chooses its source, destination, and slots.
@@ -206,7 +215,9 @@ This is specifically useful for testing clients that:
 
 ### Explicit non-goals for v1
 - intentionally killing primaries
-- forcing failover of primaries
+- `CLUSTER FAILOVER FORCE` and `CLUSTER FAILOVER TAKEOVER`, which bypass
+  primary coordination or consensus; a coordinated `primary-failover` must
+  never escalate into either of them
 - simultaneous multi-node outages
 - network partition simulation
 - process pause / SIGSTOP / half-dead socket simulation
@@ -248,6 +259,8 @@ Each loop iteration should materialize a runtime model similar to:
 - `is_loading` (bool)
 - `is_syncing` (bool)
 - `link_status`
+- `replication_offset`
+- `failover_in_progress` (bool)
 - `slots[]` or slot ranges for primaries
 - `pid` if available from local metadata
 - `managed` (bool)
@@ -514,6 +527,62 @@ more frequent event in a mixed run.
 
 ---
 
+## 6. `primary-failover`
+
+### Purpose
+Change a shard's writable endpoint without stopping any process, by promoting
+one of its replicas with a coordinated `CLUSTER FAILOVER`. This exercises
+shard-wide routing refresh, role changes on connections a client already holds,
+and write retries against an endpoint that is now a replica.
+
+### Status
+Implemented as the normal, coordinated mode only. Off by default; enabled with
+`--allow-primary-failover` or by naming `primary-failover` in `--categories`.
+
+### Candidate eligibility
+A shard may be selected only if:
+- the primary is managed, reachable, owns slots, is not failed or loading, and
+  reports no failover already in progress
+- the replica is managed, currently attached to that primary, reachable, not
+  failed, handshaking, loading, or syncing, and reports `master_link_status:up`
+- the replica's replication offset is within the failover lag budget
+  (1 MiB) of its primary's offset
+- at least three primaries own slots, and a majority of them are reachable, so
+  the promotion can be authorized
+- no inflight mutation exists
+- the user enabled the category explicitly
+
+Unlike `slot-migration`, failover does not require a fully settled cluster: an
+intentionally killed replica in another shard does not block it, so failover and
+replica churn can run in the same loop. Without `--unsafe` it is still blocked
+while any primary is unreachable or failed, or any node is handshaking, because
+those states suggest an election may already be underway.
+
+### Execution
+- send `CLUSTER FAILOVER` to the replica being promoted
+- record the shard's node IDs and slot ranges as they were before the promotion
+- transition to `waiting`
+
+`OK` only means the promotion was scheduled. A normal failover that does not
+complete is a failed event; it must never be retried as `FORCE` or `TAKEOVER`,
+which are separate scenarios with their own names and counters.
+
+### Postcondition
+Wait for:
+- the promoted node visible as a primary with the same node ID
+- the promoted node owning every slot the demoted primary owned
+- the demoted primary back as a reachable replica of the promoted node, with
+  replication resynchronized
+- cluster not reporting `CLUSTERDOWN`
+
+### Notes
+Selection holds the new roles for a while instead of failing straight back: a
+shard whose primary was promoted by the immediately preceding event is
+deprioritized, while promoting a primary chaos demoted earlier is preferred, so
+repeated role reversals and connection reuse both get exercised over a run.
+
+---
+
 ## Event selection policy
 
 Each loop must:
@@ -536,6 +605,8 @@ Example scoring ideas:
 - +4 restart a replica intentionally killed earlier
 - +3 add a replica to a degraded primary
 - +2 kill a healthy replica on a currently stable primary
+- +2 promote a primary that an earlier failover demoted
+- -3 fail a shard back immediately after promoting it
 - -5 any event that would create a second degraded primary
 - -10 any event blocked by sync or instability
 - -100 events forbidden by safety invariants

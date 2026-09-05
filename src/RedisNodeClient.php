@@ -252,6 +252,24 @@ final class RedisNodeClient
         }
     }
 
+    /**
+     * Ask a replica to take over its primary with a coordinated
+     * `CLUSTER FAILOVER`. An OK reply only means the promotion was accepted and
+     * scheduled, so callers must observe the resulting topology themselves.
+     */
+    public function clusterFailover(int $port, bool $tls, ?string $caCert): void
+    {
+        $redis = $this->connectToNode($port, $tls, $caCert);
+
+        try {
+            $response = $redis->rawCommand('CLUSTER', 'FAILOVER');
+        } finally {
+            $redis->close();
+        }
+
+        $this->assertOkResponse($response, 'CLUSTER FAILOVER', $port);
+    }
+
     public function clusterSetSlotImporting(int $port, bool $tls, ?string $caCert, int $slot, string $sourceNodeId): void
     {
         $this->clusterSetSlot($port, $tls, $caCert, $slot, 'IMPORTING', $sourceNodeId);

@@ -25,7 +25,28 @@ final readonly class ChaosNodeState
         public ?int $pid,
         public bool $managed,
         public string $health,
+        public ?int $replicationOffset = null,
+        public bool $failoverInProgress = false,
     ) {
+    }
+
+    /**
+     * A promotion target for a coordinated failover: a managed replica that is
+     * attached, caught up enough to be visible, and not already in the middle
+     * of a failover, sync, or load.
+     */
+    public function isPromotableReplica(): bool
+    {
+        return $this->role === 'replica'
+            && $this->managed
+            && $this->knownByCluster
+            && $this->reachable
+            && !$this->isFailed
+            && !$this->isHandshake
+            && !$this->isLoading
+            && !$this->isSyncing
+            && !$this->failoverInProgress
+            && $this->linkStatus === 'up';
     }
 
     public function isHealthyReplica(): bool
