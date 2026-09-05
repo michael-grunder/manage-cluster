@@ -14,13 +14,7 @@ final class ClusterStateStore
 
     public function ensureStateDirectory(): void
     {
-        if (is_dir($this->stateDir)) {
-            return;
-        }
-
-        if (!mkdir($concurrentDirectory = $this->stateDir, 0o755, true) && !is_dir($concurrentDirectory)) {
-            throw new RuntimeException(sprintf('Failed to create state directory: %s', $this->stateDir));
-        }
+        DirectoryCreator::ensure($this->stateDir, 0o755, 'state');
     }
 
     public function createClusterDirectory(): string
@@ -28,9 +22,7 @@ final class ClusterStateStore
         $this->ensureStateDirectory();
 
         $path = sprintf('%s/cluster-%s-%s', rtrim($this->stateDir, '/'), date('Ymd-His'), bin2hex(random_bytes(3)));
-        if (!mkdir($path, 0o755, true)) {
-            throw new RuntimeException(sprintf('Failed to create cluster directory: %s', $path));
-        }
+        DirectoryCreator::createNew($path, 0o755, 'cluster');
 
         return $path;
     }

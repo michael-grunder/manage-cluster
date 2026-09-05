@@ -15,9 +15,7 @@ final class TlsMaterialGenerator
     public function generate(string $clusterDir, ?string $announceIp, int $days, int $rsaBits): array
     {
         $tlsDir = sprintf('%s/tls', $clusterDir);
-        if (!mkdir($concurrentDirectory = $tlsDir, 0o700, true) && !is_dir($concurrentDirectory)) {
-            throw new RuntimeException(sprintf('Failed to create TLS directory: %s', $tlsDir));
-        }
+        DirectoryCreator::ensure($tlsDir, 0o700, 'TLS');
 
         $caKey = sprintf('%s/ca.key', $tlsDir);
         $caCrt = sprintf('%s/ca.crt', $tlsDir);

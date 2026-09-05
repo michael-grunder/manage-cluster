@@ -50,6 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only.
 
 ### Fixed
+- Restarting a node no longer prints a raw `mkdir(): File exists` PHP warning
+  over the `chaos --watch` dashboard. Reusing an existing `node-<port>`
+  directory is expected when a killed node is brought back, and directory
+  creation failures now raise a normal error naming the directory and the
+  underlying reason instead of warning to output.
 - `chaos` no longer starves the categories that plan a single move. Selection
   drew over the flat candidate list, so a category's share was proportional to
   how many targets it enumerated: on a cluster with three primaries and nine

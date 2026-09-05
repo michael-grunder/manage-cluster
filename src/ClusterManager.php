@@ -3715,9 +3715,7 @@ final class ClusterManager
         array $startConfigDirectives = [],
     ): string {
         $nodeDir = sprintf('%s/node-%d', $clusterDir, $port);
-        if (!mkdir($concurrentDirectory = $nodeDir, 0o755, true) && !is_dir($concurrentDirectory)) {
-            throw new RuntimeException(sprintf('Failed to create node directory: %s', $nodeDir));
-        }
+        DirectoryCreator::ensure($nodeDir, 0o755, 'node');
 
         $configPath = sprintf('%s/redis.conf', $nodeDir);
         $lines = [
