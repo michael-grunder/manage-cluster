@@ -11,7 +11,7 @@ final class CommandLineParser
     /**
      * @var list<string>
      */
-    private const array ACTIONS = ['start', 'stop', 'kill', 'rebalance', 'status', 'list', 'flush', 'fill', 'add-replica', 'restart-replica', 'chaos', 'completions'];
+    private const array ACTIONS = ['start', 'stop', 'kill', 'rebalance', 'status', 'list', 'flush', 'fill', 'add-replica', 'restart-replica', 'chaos', 'completions', 'version'];
 
     /**
      * @var array<string, string>
@@ -29,6 +29,7 @@ final class CommandLineParser
         'restart-replica' => 'Restart one or more failed replicas from cluster metadata',
         'chaos' => 'Run serialized replica and slot churn against a cluster for client testing',
         'completions' => 'Generate a shell completion script',
+        'version' => 'Show the version, build date, and commit this build came from',
     ];
 
     /**
@@ -123,6 +124,7 @@ final class CommandLineParser
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'completions' => [],
+        'version' => [],
     ];
 
     /**
@@ -198,6 +200,10 @@ final class CommandLineParser
             'chaos 7000 --categories primary-failover --watch',
             'chaos 7000 --allow-replica-reparent',
             'chaos 7000 --allow-primary-add --allow-primary-remove',
+        ],
+        'version' => [
+            'version',
+            '--version',
         ],
         'completions' => [
             'completions bash',
@@ -326,6 +332,15 @@ final class CommandLineParser
                 case '-h':
                     throw new InvalidArgumentException($this->usage());
 
+                case '--version':
+                case '-v':
+                    if ($action !== null) {
+                        throw new InvalidArgumentException(self::singleActionMessage());
+                    }
+
+                    $action = 'version';
+                    break;
+
                 case '--start':
                 case '--stop':
                 case '--kill':
@@ -339,7 +354,7 @@ final class CommandLineParser
                 case '--chaos':
                 case '--completions':
                     if ($action !== null) {
-                        throw new InvalidArgumentException('Only one action may be used: --start, --stop, --kill, --rebalance, --status, --list, --flush, --fill, --add-replica, --restart-replica, --chaos, or --completions.');
+                        throw new InvalidArgumentException(self::singleActionMessage());
                     }
 
                     $action = ltrim($arg, '-');
@@ -535,7 +550,7 @@ final class CommandLineParser
                             break;
                         }
 
-                        throw new InvalidArgumentException(sprintf('Specify start/stop/kill/rebalance/status/list/flush/fill/add-replica/restart-replica/chaos/completions (or --start/--stop/--kill/--rebalance/--status/--list/--flush/--fill/--add-replica/--restart-replica/--chaos/--completions) before ports (got: %s).', $arg));
+                        throw new InvalidArgumentException(sprintf('Specify %s before ports (got: %s).', self::actionChoiceMessage(), $arg));
                     }
 
                     $portTokens[] = $arg;
@@ -544,7 +559,7 @@ final class CommandLineParser
         }
 
         if ($action === null) {
-            throw new InvalidArgumentException('Missing action: use start/stop/kill/rebalance/status/list/flush/fill/add-replica/restart-replica/chaos/completions (or --start/--stop/--kill/--rebalance/--status/--list/--flush/--fill/--add-replica/--restart-replica/--chaos/--completions).');
+            throw new InvalidArgumentException(sprintf('Missing action: use %s.', self::actionChoiceMessage()));
         }
 
         if ($action === 'start' && $replicas < 0) {
@@ -760,7 +775,7 @@ final class CommandLineParser
             }
         }
 
-        if (!in_array($action, ['fill', 'status', 'list', 'completions'], true) && $ports === []) {
+        if (!in_array($action, ['fill', 'status', 'list', 'completions', 'version'], true) && $ports === []) {
             throw new InvalidArgumentException('No ports provided');
         }
 
@@ -794,6 +809,10 @@ final class CommandLineParser
 
         if ($action === 'completions' && count($ports) !== 0) {
             throw new InvalidArgumentException('completions does not accept seed ports.');
+        }
+
+        if ($action === 'version' && count($ports) !== 0) {
+            throw new InvalidArgumentException('version does not accept seed ports.');
         }
 
         $fillOptions = null;
@@ -1107,6 +1126,26 @@ final class CommandLineParser
         return self::inferRequestedAction($argv);
     }
 
+    /**
+     * Both spellings of every action, so action errors stay in sync with {@see ACTIONS}.
+     */
+    private static function actionChoiceMessage(): string
+    {
+        return sprintf(
+            '%s (or %s)',
+            implode('/', self::ACTIONS),
+            implode('/', array_map(static fn (string $action): string => '--' . $action, self::ACTIONS)),
+        );
+    }
+
+    private static function singleActionMessage(): string
+    {
+        $options = array_map(static fn (string $action): string => '--' . $action, self::ACTIONS);
+        $last = array_pop($options);
+
+        return sprintf('Only one action may be used: %s, or %s.', implode(', ', $options), $last);
+    }
+
     private static function isActionToken(string $value): bool
     {
         return in_array($value, self::ACTIONS, true);
@@ -1305,6 +1344,7 @@ final class CommandLineParser
     {
         return [
             ['-h, --help', 'Print help'],
+            ['-v, --version', 'Print version, build date, and commit'],
             ['--binary PATH', 'Path to redis-server or valkey-server'],
             ['--redis-cli PATH', 'Path to redis-cli (default: redis-cli)'],
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
@@ -1345,6 +1385,7 @@ final class CommandLineParser
             'restart-replica' => 'restart-replica SEED_PORT [--replica PORT] [--primary PORT] [--all] [--wait] [--config NAME=VALUE]',
             'chaos' => 'chaos SEED_PORT [--categories LIST] [--interval SECONDS] [--max-events N] [--dry-run] [--watch]',
             'completions' => 'completions bash|zsh',
+            'version' => 'version',
             default => '[OPTIONS] <COMMAND> [ARGS]',
         };
     }

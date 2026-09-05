@@ -9,6 +9,7 @@ use Mgrunder\CreateCluster\CommandLineParser;
 use Mgrunder\CreateCluster\InvocationName;
 use Mgrunder\CreateCluster\KillMethod;
 use Mgrunder\CreateCluster\SlotMigrationStrategy;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class CommandLineParserTest extends TestCase
@@ -28,6 +29,8 @@ final class CommandLineParserTest extends TestCase
         self::assertStringContainsString('list', $usage);
         self::assertStringContainsString('chaos', $usage);
         self::assertStringContainsString('completions', $usage);
+        self::assertStringContainsString('version', $usage);
+        self::assertStringContainsString('-v, --version', $usage);
         self::assertStringContainsString('help', $usage);
     }
 
@@ -66,6 +69,41 @@ final class CommandLineParserTest extends TestCase
         self::assertStringContainsString('bin/manage-cluster completions bash|zsh', $usage);
         self::assertStringContainsString('bin/manage-cluster completions bash', $usage);
         self::assertStringContainsString('bin/manage-cluster completions zsh', $usage);
+    }
+
+    #[DataProvider('versionArgumentProvider')]
+    public function testVersionIsAccessibleAsACommandAndAsAFlag(string $argument): void
+    {
+        $options = self::parserNamed()->parse(['bin/manage-cluster', $argument]);
+
+        self::assertSame('version', $options->action);
+        self::assertSame([], $options->ports);
+    }
+
+    /**
+     * @return iterable<string, array{argument: string}>
+     */
+    public static function versionArgumentProvider(): iterable
+    {
+        yield 'command' => ['argument' => 'version'];
+        yield 'long flag' => ['argument' => '--version'];
+        yield 'short flag' => ['argument' => '-v'];
+    }
+
+    public function testVersionRejectsSeedPorts(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('version does not accept seed ports.');
+
+        self::parserNamed()->parse(['bin/manage-cluster', 'version', '7000']);
+    }
+
+    public function testVersionCannotBeCombinedWithAnotherAction(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Only one action may be used');
+
+        self::parserNamed()->parse(['bin/manage-cluster', 'status', '--version']);
     }
 
     public function testUsageRendersTheInvokedCommandName(): void

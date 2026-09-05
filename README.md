@@ -27,6 +27,8 @@ cluster management.
   and remove primaries, migrate slots between primaries, and fail primaries over
   to their replicas, waiting for the cluster to converge between each step.
 - Generate shell completion scripts for supported shells.
+- Report the running version, including the commit and build time baked into a
+  PHAR build.
 - Start TLS-only local clusters with ephemeral certificates.
 - Generate a standalone startup shell script instead of starting immediately.
 - Build a single-file PHAR binary for distribution.
@@ -538,6 +540,42 @@ printed examples can be copied and pasted as-is:
 Error output uses the same name, and `completions bash|zsh` registers
 completion for the name the CLI was invoked as.
 
+### `version`
+
+Show which build is running:
+
+```bash
+bin/manage-cluster version
+bin/manage-cluster --version
+bin/manage-cluster -v
+```
+
+A PHAR reports the metadata recorded when it was built:
+
+```
+manage-cluster.phar 0.1.0
+commit    5ef1f40
+built     2026-09-05 20:04:01 UTC
+source    PHAR build
+php       8.4.13
+```
+
+A source checkout has no recorded build, so it reports the declared version and
+describes the working tree with `git` instead, marking a tree with uncommitted
+changes as `-dirty`:
+
+```
+manage-cluster 0.1.0
+commit    5ef1f40-dirty
+source    source checkout
+php       8.4.13
+```
+
+The `commit` line is omitted when `git` is unavailable or the checkout is not a
+repository. The declared version lives in `BuildInfo::VERSION`; `composer.json`
+intentionally carries no `version` field, as Composer recommends for packages
+versioned by VCS tags.
+
 ### `completions`
 
 Generate a shell completion script:
@@ -619,6 +657,8 @@ Compression control:
 Notes:
 
 - PHAR builds require the `phar` extension and `phar.readonly=0` at build time
+- Each build embeds `build-info.json` with the version, the commit it was built
+  from, and the UTC build time, which `manage-cluster version` prints
 - Automatic compression prefers `bz2`, then `gz`, then uncompressed output
 - Compressed PHARs require the matching runtime extension: `bz2` for bzip2,
   `zlib` for gzip

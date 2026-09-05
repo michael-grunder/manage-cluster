@@ -3,6 +3,8 @@
 
 declare(strict_types=1);
 
+use Mgrunder\CreateCluster\BuildInfoRenderer;
+use Mgrunder\CreateCluster\BuildInfoResolver;
 use Mgrunder\CreateCluster\ClusterManager;
 use Mgrunder\CreateCluster\ClusterShardsParser;
 use Mgrunder\CreateCluster\ClusterStateStore;
@@ -61,6 +63,17 @@ try {
     fwrite(STDERR, $e->getMessage() . PHP_EOL . PHP_EOL);
     fwrite(STDERR, $parser->contextualUsage($action, $interactive) . PHP_EOL);
     exit(1);
+}
+
+if ($options->action === 'version') {
+    try {
+        fwrite(STDOUT, (new BuildInfoRenderer())->render(BuildInfoResolver::forRunningBuild()->resolve(), $invocation) . PHP_EOL);
+    } catch (Throwable $e) {
+        fwrite(STDERR, $e->getMessage() . PHP_EOL);
+        exit(1);
+    }
+
+    exit(0);
 }
 
 if ($options->action === 'completions') {

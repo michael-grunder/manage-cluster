@@ -3,6 +3,10 @@
 
 declare(strict_types=1);
 
+use Mgrunder\CreateCluster\BuildInfo;
+use Mgrunder\CreateCluster\BuildInfoResolver;
+use Mgrunder\CreateCluster\BuildInfoSource;
+
 require dirname(__DIR__) . '/vendor/autoload.php';
 
 $projectRoot = dirname(__DIR__);
@@ -79,6 +83,7 @@ logProgress('Adding bin/manage-cluster');
 addFile($phar, $projectRoot, 'bin/manage-cluster');
 addDirectory($phar, $projectRoot, 'src');
 addRuntimeVendor($phar, $projectRoot);
+addBuildMetadata($phar, $projectRoot);
 
 logProgress('Writing PHAR stub');
 $phar->setStub(<<<'PHP'
@@ -105,6 +110,31 @@ if (!chmod($output, 0o755)) {
 }
 
 fwrite(STDOUT, sprintf("Built %s\n", $output));
+
+/**
+ * Record the version, build time, and commit the archive was built from so the
+ * `version` command can report them from inside the PHAR.
+ */
+function addBuildMetadata(\Phar $phar, string $projectRoot): void
+{
+    $buildInfo = new BuildInfo(
+        version: BuildInfo::VERSION,
+        commit: BuildInfoResolver::describeWorkingTree($projectRoot),
+        builtAt: new \DateTimeImmutable('now', new \DateTimeZone('UTC')),
+        source: BuildInfoSource::Build,
+    );
+
+    $metadata = json_encode($buildInfo->toMetadataArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+
+    logProgress(sprintf(
+        'Recording build metadata: %s (%s) built at %s',
+        $buildInfo->version,
+        $buildInfo->commit ?? 'unknown commit',
+        $buildInfo->builtAt?->format('Y-m-d H:i:s') . ' UTC',
+    ));
+
+    $phar->addFromString(BuildInfoResolver::METADATA_FILE, $metadata . "\n");
+}
 
 /**
  * @param \Phar $phar

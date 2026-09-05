@@ -35,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `[-]` in the slot column, instead of disappearing from the topology.
 
 ### Added
+- Added a `version` command, also available as `-v` / `--version`, that prints
+  the version, the commit it was built from, the build time, and the PHP version
+  in use. A built PHAR reports the commit and UTC build time recorded by
+  `composer build-phar`; a source checkout reports the commit `git` sees,
+  suffixed with `-dirty` when the working tree has uncommitted changes.
+- `composer build-phar` now embeds `build-info.json` with the version, commit,
+  and UTC build time of the archive.
 - Added `chaos --categories primary-add` and `chaos --categories primary-remove`
   (also enabled with `chaos --allow-primary-add` / `--allow-primary-remove`),
   which grow and shrink the primary inventory as multi-step events.
