@@ -399,6 +399,10 @@ Useful options:
 
 Behavior notes:
 
+- Every run starts by printing `Chaos categories:` followed by the categories it
+  may pick from, written in `--categories` syntax so weights other than `1` are
+  visible. With `--watch` the same line appears in the event log, and the
+  summary header keeps showing the list for the whole run
 - `chaos` actively executes `replica-kill`, `replica-restart`, `replica-add`,
   `replica-reparent`, `primary-add`, `primary-remove`, `slot-migration`, and
   `primary-failover`

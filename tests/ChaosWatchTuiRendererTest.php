@@ -156,6 +156,19 @@ final class ChaosWatchTuiRendererTest extends TestCase
         self::assertStringContainsString('categories replica-kill,slot-migration', $summary);
     }
 
+    public function testSummaryLineShowsNonNeutralCategoryWeights(): void
+    {
+        $state = new ChaosWatchState($this->runtime(), $this->options(new ChaosCategorySelection([
+            ChaosOptions::CATEGORY_REPLICA_KILL => 1.0,
+            ChaosOptions::CATEGORY_SLOT_MIGRATION => 3.0,
+        ])));
+        $state->updateView($this->view());
+
+        $summary = (string) $this->summaryLine($this->buildRootWidget($state, 30));
+
+        self::assertStringContainsString('categories replica-kill,slot-migration:3', $summary);
+    }
+
     public function testQuitKeysAskTheRunToStop(): void
     {
         $renderer = new ChaosWatchTuiRenderer();
@@ -323,10 +336,10 @@ final class ChaosWatchTuiRendererTest extends TestCase
         return new ChaosRuntimeState('cluster-1', 7000, microtime(true), ['replica-kill', 'slot-migration']);
     }
 
-    private function options(): ChaosOptions
+    private function options(?ChaosCategorySelection $categories = null): ChaosOptions
     {
         return new ChaosOptions(
-            categories: ChaosCategorySelection::fromCategories(['replica-kill', 'slot-migration']),
+            categories: $categories ?? ChaosCategorySelection::fromCategories(['replica-kill', 'slot-migration']),
             intervalSeconds: 5,
             maxEvents: 20,
             maxFailures: 3,

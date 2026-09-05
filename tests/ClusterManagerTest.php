@@ -560,10 +560,10 @@ MESSAGE);
         return $scores;
     }
 
-    private function chaosOptions(): ChaosOptions
+    private function chaosOptions(?ChaosCategorySelection $categories = null): ChaosOptions
     {
         return new ChaosOptions(
-            categories: ChaosCategorySelection::fromCategories([ChaosOptions::CATEGORY_PRIMARY_FAILOVER]),
+            categories: $categories ?? ChaosCategorySelection::fromCategories([ChaosOptions::CATEGORY_PRIMARY_FAILOVER]),
             intervalSeconds: 8,
             maxEvents: null,
             maxFailures: 5,
@@ -1442,6 +1442,36 @@ MESSAGE);
             replicationOffset: $replicationOffset,
             health: $health,
         );
+    }
+
+    #[DataProvider('chaosCategoryStartupLines')]
+    public function testChaosStartupLineShowsCategoriesAndNonNeutralWeights(
+        ChaosCategorySelection $categories,
+        string $expected,
+    ): void {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $method = new ReflectionClass($manager)->getMethod('formatChaosCategoriesLine');
+
+        self::assertSame($expected, $method->invoke($manager, $this->chaosOptions($categories)));
+    }
+
+    /**
+     * @return iterable<string, array{ChaosCategorySelection, string}>
+     */
+    public static function chaosCategoryStartupLines(): iterable
+    {
+        yield 'defaults omit neutral weights' => [
+            ChaosCategorySelection::fromCategories(ChaosOptions::DEFAULT_CATEGORIES),
+            'Chaos categories: replica-kill,replica-restart,replica-add',
+        ];
+        yield 'weights are shown in --categories syntax' => [
+            new ChaosCategorySelection([
+                ChaosOptions::CATEGORY_REPLICA_KILL => 0.5,
+                ChaosOptions::CATEGORY_SLOT_MIGRATION => 3.0,
+                ChaosOptions::CATEGORY_REPLICA_ADD => 1.0,
+            ]),
+            'Chaos categories: replica-kill:0.5,slot-migration:3,replica-add',
+        ];
     }
 
     #[DataProvider('chaosCategoryWeightDistributions')]

@@ -1361,7 +1361,10 @@ final class ClusterManager
         $watch = null;
 
         try {
+            // Announced after the watch takes over the terminal so the line
+            // lands in the event log instead of being wiped by the TUI.
             $watch = $this->startChaosWatch($chaos, $runtime);
+            $this->output->info($this->formatChaosCategoriesLine($chaos));
             $this->runChaosLoop($options, $chaos, $runtime, $metadata, $seedPort, $tls, $caCert);
         } finally {
             $this->stopChaosWatch();
@@ -1374,6 +1377,16 @@ final class ClusterManager
         }
 
         $this->output->success(sprintf('Chaos finished after %d planned events.', $runtime->completedEventCount()));
+    }
+
+    /**
+     * Report the categories a run may pick from, in `--categories` syntax so
+     * weights other than the neutral 1 are visible and the line can be pasted
+     * back into another run.
+     */
+    private function formatChaosCategoriesLine(ChaosOptions $chaos): string
+    {
+        return sprintf('Chaos categories: %s', $chaos->categories->describe());
     }
 
     /**
