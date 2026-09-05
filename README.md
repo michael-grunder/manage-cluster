@@ -23,9 +23,9 @@ cluster management.
 - Kill an interactively selected primary/replica or a specific replica port.
 - Interactively add a replica to a selected primary.
 - Restart an interactively selected failed replica or a specific failed replica port from saved node metadata.
-- Run serialized chaos loops that kill, restart, and add replicas, migrate slots
-  between primaries, and fail primaries over to their replicas, waiting for the
-  cluster to converge between each step.
+- Run serialized chaos loops that kill, restart, add, and reparent replicas,
+  migrate slots between primaries, and fail primaries over to their replicas,
+  waiting for the cluster to converge between each step.
 - Generate shell completion scripts for supported shells.
 - Start TLS-only local clusters with ephemeral certificates.
 - Generate a standalone startup shell script instead of starting immediately.
@@ -344,13 +344,14 @@ bin/manage-cluster chaos 7000 --allow-slot-migration --slot-batch 32
 bin/manage-cluster chaos 7000 --categories slot-migration --slot-strategy random
 bin/manage-cluster chaos 7000 --allow-primary-failover
 bin/manage-cluster chaos 7000 --categories primary-failover --watch
+bin/manage-cluster chaos 7000 --allow-replica-reparent
 ```
 
 Useful options:
 
 - `--categories LIST` limits event selection to `replica-kill`,
-  `replica-restart`, `replica-remove`, `replica-add`, `slot-migration`, and
-  `primary-failover`
+  `replica-restart`, `replica-remove`, `replica-add`, `replica-reparent`,
+  `slot-migration`, and `primary-failover`
 - `--interval SECONDS` sets the minimum time between completed steps
 - `--max-events N` stops after N completed events
 - `--max-failures N` aborts after N consecutive execution or convergence failures
@@ -363,6 +364,8 @@ Useful options:
   without having to restate the replica categories
 - `--allow-primary-failover` adds `primary-failover` to the allowed categories
   without having to restate the replica categories
+- `--allow-replica-reparent` adds `replica-reparent` to the allowed categories
+  without having to restate the replica categories
 - `--slot-strategy NAME` picks `balanced` (default) or `random` slot selection
 - `--slot-batch N` bounds how many slots one migration event moves (default: 16)
 - `--unsafe` allows lower-redundancy actions that are otherwise skipped
@@ -370,7 +373,7 @@ Useful options:
 Behavior notes:
 
 - `chaos` actively executes `replica-kill`, `replica-restart`, `replica-add`,
-  `slot-migration`, and `primary-failover`
+  `replica-reparent`, `slot-migration`, and `primary-failover`
 - `replica-remove` is parsed for forward compatibility but remains disabled by
   the conservative planner
 - The loop keeps in-memory runtime history so follow-up actions can repair or
@@ -441,6 +444,35 @@ unreachable or failed or any node is still handshaking. Over a run, chaos holds
 the new roles for a while instead of failing straight back, then prefers
 promoting a primary it demoted earlier so role reversals and connection reuse
 both get exercised.
+
+#### Replica reparenting
+
+`replica-reparent` is off by default. Enable it with `--allow-replica-reparent`,
+or name it in `--categories`. Each event sends `CLUSTER REPLICATE` to a live
+replica so it follows a different primary. Nothing stops and nothing is
+replaced: the replica keeps its process, port, and node ID, so a client that
+cached the donor shard's replica list still reaches a server that answers
+normally but no longer belongs to that shard. That is a different cache
+invalidation path from killing the same endpoint, and it is the direct test of
+whether a client remaps the keyspace behind a replica it already knows.
+
+A move is only chosen when it is a routing experiment rather than a redundancy
+cut:
+
+- the replica is managed, attached, reachable, not loading or syncing, and
+  reports `master_link_status:up`
+- the donor primary is reachable and keeps another healthy replica afterwards,
+  unless `--unsafe` allows draining it to zero
+- the recipient is a different reachable primary that owns slots and is not
+  failed, loading, or failing over
+- at least two reachable primaries own slots
+
+The event is complete only when the same node ID appears under the new primary,
+the donor no longer lists it, and its replication link to the new primary is up,
+so chaos does not stack another mutation on a replica that is still
+synchronizing. Selection prefers a recipient with no healthy replicas, holds a
+new layout for a while instead of bouncing one replica between two shards, and
+later prefers returning a replica to the shard it came from.
 
 ### `help`
 

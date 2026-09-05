@@ -32,6 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `[-]` in the slot column, instead of disappearing from the topology.
 
 ### Added
+- Added `chaos --categories replica-reparent` (also enabled with
+  `chaos --allow-replica-reparent`), which moves a live replica to a different
+  primary with `CLUSTER REPLICATE`. The replica keeps its process, port, and
+  node ID, so a client that cached the old shard's replica list still reaches a
+  server that answers normally but no longer belongs there. A move is only
+  chosen when the replica is attached with its link up, the donor keeps another
+  healthy replica (unless `--unsafe`), and the recipient is a different
+  reachable primary that owns slots. The event completes only when the same node
+  ID is listed by the new primary, the donor has dropped it, and its replication
+  link to the new primary is up.
 - Added `chaos --categories primary-failover` (also enabled with
   `chaos --allow-primary-failover`), which promotes a caught-up replica over its
   own primary with a coordinated `CLUSTER FAILOVER` and waits until the promoted

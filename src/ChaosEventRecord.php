@@ -24,6 +24,7 @@ final readonly class ChaosEventRecord
         public array $reasons = [],
         public ?SlotMigrationPlan $slotMigrationPlan = null,
         public ?PrimaryFailoverPlan $primaryFailoverPlan = null,
+        public ?ReplicaReparentPlan $replicaReparentPlan = null,
     ) {
     }
 
@@ -46,6 +47,7 @@ final readonly class ChaosEventRecord
             reasons: $this->reasons,
             slotMigrationPlan: $this->slotMigrationPlan,
             primaryFailoverPlan: $this->primaryFailoverPlan,
+            replicaReparentPlan: $this->replicaReparentPlan,
         );
     }
 }

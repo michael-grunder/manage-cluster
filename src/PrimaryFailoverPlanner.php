@@ -46,7 +46,7 @@ final readonly class PrimaryFailoverPlanner
 
             foreach ($primary->replicaPorts as $replicaPort) {
                 $replicaState = $view->nodeStateByPort[$replicaPort] ?? null;
-                if (!$replicaState instanceof ChaosNodeState || !$replicaState->isPromotableReplica()) {
+                if (!$replicaState instanceof ChaosNodeState || !$replicaState->isStableManagedReplica()) {
                     continue;
                 }
 

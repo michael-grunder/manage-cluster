@@ -17,6 +17,9 @@ use Mgrunder\CreateCluster\ClusterShardStatus;
 use Mgrunder\CreateCluster\PrimaryFailoverEligibility;
 use Mgrunder\CreateCluster\PrimaryFailoverPlan;
 use Mgrunder\CreateCluster\PrimaryFailoverPlanner;
+use Mgrunder\CreateCluster\ReplicaReparentEligibility;
+use Mgrunder\CreateCluster\ReplicaReparentPlan;
+use Mgrunder\CreateCluster\ReplicaReparentPlanner;
 use Mgrunder\CreateCluster\SlotRange;
 use Mgrunder\CreateCluster\PortRangeFormatter;
 use Mgrunder\CreateCluster\ReplicaTarget;
@@ -564,6 +567,7 @@ MESSAGE);
             cooldownSeconds: 2,
             allowSlotMigration: false,
             allowPrimaryFailover: true,
+            allowReplicaReparent: false,
             unsafe: false,
         );
     }
@@ -673,6 +677,7 @@ MESSAGE);
         bool $syncing = false,
         array $slotRanges = [],
         ?string $nodeId = null,
+        ?string $linkStatus = null,
     ): ChaosNodeState {
         return new ChaosNodeState(
             port: $port,
@@ -685,12 +690,326 @@ MESSAGE);
             isHandshake: false,
             isLoading: false,
             isSyncing: $syncing,
-            linkStatus: $role === 'replica' ? 'up' : '',
+            linkStatus: $role === 'replica' ? ($linkStatus ?? 'up') : '',
             slotRanges: $slotRanges,
             pid: null,
             managed: true,
             health: 'online',
             replicationOffset: 1_000,
+        );
+    }
+
+
+    public function testReplicaReparentConvergesWhenTheSameNodeMovesShards(): void
+    {
+        $view = $this->reparentView(followsPort: 7001, sourceReplicaPorts: [7004], targetReplicaPorts: [7003, 7005]);
+
+        self::assertTrue($this->invokeIsReplicaReparentSatisfied($this->replicaReparentEvent(), $view));
+    }
+
+    /**
+     * @param array{followsPort?: int|null, sourceReplicaPorts?: list<int>, targetReplicaPorts?: list<int>, replicaNodeId?: string, replicaReachable?: bool, replicaSyncing?: bool, linkStatus?: string, clusterDown?: bool, dropTargetPrimary?: bool} $overrides
+     */
+    #[DataProvider('unfinishedReplicaReparentProvider')]
+    public function testReplicaReparentIsUnfinishedUntilBothShardsAgree(array $overrides): void
+    {
+        $view = $this->reparentView(
+            followsPort: array_key_exists('followsPort', $overrides) ? $overrides['followsPort'] : 7001,
+            sourceReplicaPorts: $overrides['sourceReplicaPorts'] ?? [7004],
+            targetReplicaPorts: $overrides['targetReplicaPorts'] ?? [7003, 7005],
+            replicaNodeId: $overrides['replicaNodeId'] ?? 'node-7003',
+            replicaReachable: $overrides['replicaReachable'] ?? true,
+            replicaSyncing: $overrides['replicaSyncing'] ?? false,
+            linkStatus: $overrides['linkStatus'] ?? 'up',
+            clusterDown: $overrides['clusterDown'] ?? false,
+            dropTargetPrimary: $overrides['dropTargetPrimary'] ?? false,
+        );
+
+        self::assertFalse($this->invokeIsReplicaReparentSatisfied($this->replicaReparentEvent(), $view));
+    }
+
+    /**
+     * @return iterable<string, array{overrides: array<string, mixed>}>
+     */
+    public static function unfinishedReplicaReparentProvider(): iterable
+    {
+        yield 'replica still follows the donor' => ['overrides' => [
+            'followsPort' => 7000,
+            'sourceReplicaPorts' => [7003, 7004],
+            'targetReplicaPorts' => [7005],
+        ]];
+        yield 'donor still lists the replica' => ['overrides' => ['sourceReplicaPorts' => [7003, 7004]]];
+        yield 'recipient does not list the replica yet' => ['overrides' => ['targetReplicaPorts' => [7005]]];
+        yield 'recipient is not a primary yet' => ['overrides' => ['dropTargetPrimary' => true]];
+        yield 'replica is still resynchronizing' => ['overrides' => ['replicaSyncing' => true]];
+        yield 'replication link is not up' => ['overrides' => ['linkStatus' => 'down']];
+        yield 'replica is unreachable' => ['overrides' => ['replicaReachable' => false]];
+        yield 'port came back with a new node id' => ['overrides' => ['replicaNodeId' => 'node-7003-replaced']];
+        yield 'cluster is down' => ['overrides' => ['clusterDown' => true]];
+    }
+
+    public function testReplicaReparentPrefersDegradedRecipients(): void
+    {
+        $runtime = $this->chaosRuntime();
+
+        self::assertSame(
+            [[7003, 7001, 2], [7003, 7002, 5], [7004, 7001, 2], [7004, 7002, 5]],
+            $this->invokeReplicaReparentCandidateScores($this->chaosViewForReparent(), $runtime),
+        );
+    }
+
+    public function testReplicaReparentDeprioritizesMovingTheSameReplicaTwice(): void
+    {
+        $runtime = $this->chaosRuntime();
+        $runtime->rememberHistory($this->completedReparentEvent(replicaPort: 7003, sourcePort: 7001, targetPort: 7000));
+
+        // 7003 was just moved, so moving it again right away is the least
+        // attractive option even though it could return to 7001.
+        self::assertSame(
+            [[7003, 7001, -1], [7003, 7002, 2], [7004, 7001, 2], [7004, 7002, 5]],
+            $this->invokeReplicaReparentCandidateScores($this->chaosViewForReparent(), $runtime),
+        );
+    }
+
+    public function testReplicaReparentPrefersRestoringAnEarlierLayout(): void
+    {
+        $runtime = $this->chaosRuntime();
+        $runtime->rememberHistory($this->completedReparentEvent(replicaPort: 7003, sourcePort: 7001, targetPort: 7000));
+        $runtime->rememberHistory(new ChaosEventRecord(
+            id: 2,
+            category: ChaosOptions::CATEGORY_SLOT_MIGRATION,
+            status: 'completed',
+            targetPort: 7002,
+            targetPrimaryPort: 7001,
+            startedAt: 1.0,
+            completedAt: 2.0,
+            summary: 'slot-migration',
+            postcondition: 'moved',
+        ));
+
+        self::assertSame(
+            [[7003, 7001, 3], [7003, 7002, 5], [7004, 7001, 2], [7004, 7002, 5]],
+            $this->invokeReplicaReparentCandidateScores($this->chaosViewForReparent(), $runtime),
+        );
+    }
+
+    public function testReplicaReparentCandidatesAreEmptyWhileTheClusterBlocksIt(): void
+    {
+        self::assertSame(
+            [],
+            $this->invokeReplicaReparentCandidateScores($this->chaosViewForReparent(clusterDown: true), $this->chaosRuntime()),
+        );
+    }
+
+    private function chaosRuntime(): ChaosRuntimeState
+    {
+        return new ChaosRuntimeState(
+            clusterId: 'test-cluster',
+            seedPort: 7000,
+            startedAt: 0.0,
+            allowedCategories: [ChaosOptions::CATEGORY_REPLICA_REPARENT],
+        );
+    }
+
+    private function completedReparentEvent(int $replicaPort, int $sourcePort, int $targetPort): ChaosEventRecord
+    {
+        $plan = new ReplicaReparentPlan(
+            replicaPort: $replicaPort,
+            replicaNodeId: sprintf('node-%d', $replicaPort),
+            sourcePrimaryPort: $sourcePort,
+            sourcePrimaryNodeId: sprintf('node-%d', $sourcePort),
+            targetPrimaryPort: $targetPort,
+            targetPrimaryNodeId: sprintf('node-%d', $targetPort),
+        );
+
+        return new ChaosEventRecord(
+            id: 1,
+            category: ChaosOptions::CATEGORY_REPLICA_REPARENT,
+            status: 'completed',
+            targetPort: $replicaPort,
+            targetPrimaryPort: $targetPort,
+            startedAt: 0.0,
+            completedAt: 1.0,
+            summary: $plan->summary(),
+            postcondition: $plan->postcondition(),
+            replicaReparentPlan: $plan,
+        );
+    }
+
+    private function replicaReparentEvent(): ChaosEventRecord
+    {
+        $plan = new ReplicaReparentPlan(
+            replicaPort: 7003,
+            replicaNodeId: 'node-7003',
+            sourcePrimaryPort: 7000,
+            sourcePrimaryNodeId: 'node-7000',
+            targetPrimaryPort: 7001,
+            targetPrimaryNodeId: 'node-7001',
+        );
+
+        return new ChaosEventRecord(
+            id: 1,
+            category: ChaosOptions::CATEGORY_REPLICA_REPARENT,
+            status: 'waiting',
+            targetPort: $plan->replicaPort,
+            targetPrimaryPort: $plan->targetPrimaryPort,
+            startedAt: 0.0,
+            completedAt: null,
+            summary: $plan->summary(),
+            postcondition: $plan->postcondition(),
+            replicaReparentPlan: $plan,
+        );
+    }
+
+    private function invokeIsReplicaReparentSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $method = new ReflectionClass($manager)->getMethod('isReplicaReparentSatisfied');
+
+        $satisfied = $method->invoke($manager, $event, $view);
+        self::assertIsBool($satisfied);
+
+        return $satisfied;
+    }
+
+    /**
+     * @return list<array{0:int,1:int,2:int}> replica port, recipient primary port, and score
+     */
+    private function invokeReplicaReparentCandidateScores(ChaosClusterView $view, ChaosRuntimeState $runtime): array
+    {
+        $manager = $this->newClusterManagerWithoutConstructor();
+        $reflection = new ReflectionClass($manager);
+        $reflection->getProperty('replicaReparentEligibility')->setValue($manager, new ReplicaReparentEligibility());
+        $reflection->getProperty('replicaReparentPlanner')->setValue($manager, new ReplicaReparentPlanner());
+
+        $candidates = $reflection->getMethod('buildReplicaReparentCandidates')->invoke(
+            $manager,
+            $view,
+            $runtime,
+            $this->chaosOptions(),
+        );
+
+        self::assertIsArray($candidates);
+
+        $scores = [];
+        foreach ($candidates as $candidate) {
+            self::assertInstanceOf(ChaosCandidateEvent::class, $candidate);
+            $plan = $candidate->replicaReparentPlan;
+            self::assertInstanceOf(ReplicaReparentPlan::class, $plan);
+            $scores[] = [$plan->replicaPort, $plan->targetPrimaryPort, $candidate->score];
+        }
+
+        return $scores;
+    }
+
+    /**
+     * A donor with two healthy replicas, a shard with one, and a degraded
+     * primary that would welcome either of the donor's replicas.
+     */
+    private function chaosViewForReparent(bool $clusterDown = false): ChaosClusterView
+    {
+        $shards = [
+            7000 => ['range' => new SlotRange(0, 5461), 'replicas' => [7003, 7004]],
+            7001 => ['range' => new SlotRange(5462, 10922), 'replicas' => [7005]],
+            7002 => ['range' => new SlotRange(10923, 16383), 'replicas' => []],
+        ];
+
+        $nodeStateByPort = [];
+        $primaryStateByPort = [];
+        foreach ($shards as $primaryPort => $shard) {
+            $nodeStateByPort[$primaryPort] = $this->chaosNode($primaryPort, 'primary', slotRanges: [$shard['range']]);
+            foreach ($shard['replicas'] as $replicaPort) {
+                $nodeStateByPort[$replicaPort] = $this->chaosNode($replicaPort, 'replica', primaryPort: $primaryPort);
+            }
+
+            $primaryStateByPort[$primaryPort] = new ChaosPrimaryState(
+                port: $primaryPort,
+                nodeId: sprintf('node-%d', $primaryPort),
+                reachable: true,
+                slotRanges: [$shard['range']],
+                replicaPorts: $shard['replicas'],
+                healthyReplicaCount: count($shard['replicas']),
+                syncingReplicaCount: 0,
+                failedReplicaCount: 0,
+            );
+        }
+
+        return new ChaosClusterView(
+            clusterId: 'test-cluster',
+            seedPort: 7000,
+            topologyHash: 'hash',
+            clusterDown: $clusterDown,
+            broadlyHealthy: !$clusterDown,
+            nodeStateByPort: $nodeStateByPort,
+            primaryStateByPort: $primaryStateByPort,
+            replicaStateByPort: [],
+            degradedPrimaryPorts: $clusterDown ? [] : [7002],
+        );
+    }
+
+    /**
+     * @param list<int> $sourceReplicaPorts
+     * @param list<int> $targetReplicaPorts
+     */
+    private function reparentView(
+        ?int $followsPort,
+        array $sourceReplicaPorts,
+        array $targetReplicaPorts,
+        string $replicaNodeId = 'node-7003',
+        bool $replicaReachable = true,
+        bool $replicaSyncing = false,
+        string $linkStatus = 'up',
+        bool $clusterDown = false,
+        bool $dropTargetPrimary = false,
+    ): ChaosClusterView {
+        $primaryStateByPort = [
+            7000 => new ChaosPrimaryState(
+                port: 7000,
+                nodeId: 'node-7000',
+                reachable: true,
+                slotRanges: [new SlotRange(0, 8191)],
+                replicaPorts: $sourceReplicaPorts,
+                healthyReplicaCount: count($sourceReplicaPorts),
+                syncingReplicaCount: 0,
+                failedReplicaCount: 0,
+            ),
+        ];
+
+        if (!$dropTargetPrimary) {
+            $primaryStateByPort[7001] = new ChaosPrimaryState(
+                port: 7001,
+                nodeId: 'node-7001',
+                reachable: true,
+                slotRanges: [new SlotRange(8192, 16383)],
+                replicaPorts: $targetReplicaPorts,
+                healthyReplicaCount: count($targetReplicaPorts),
+                syncingReplicaCount: 0,
+                failedReplicaCount: 0,
+            );
+        }
+
+        return new ChaosClusterView(
+            clusterId: 'test-cluster',
+            seedPort: 7000,
+            topologyHash: 'hash',
+            clusterDown: $clusterDown,
+            broadlyHealthy: !$clusterDown,
+            nodeStateByPort: [
+                7000 => $this->chaosNode(7000, 'primary', slotRanges: [new SlotRange(0, 8191)]),
+                7001 => $this->chaosNode(7001, 'primary', slotRanges: [new SlotRange(8192, 16383)]),
+                7003 => $this->chaosNode(
+                    7003,
+                    'replica',
+                    primaryPort: $followsPort,
+                    reachable: $replicaReachable,
+                    syncing: $replicaSyncing,
+                    nodeId: $replicaNodeId,
+                    linkStatus: $linkStatus,
+                ),
+            ],
+            primaryStateByPort: $primaryStateByPort,
+            replicaStateByPort: [],
+            degradedPrimaryPorts: [],
         );
     }
 

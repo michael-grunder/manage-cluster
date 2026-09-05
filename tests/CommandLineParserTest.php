@@ -965,6 +965,47 @@ final class CommandLineParserTest extends TestCase
         $parser->parse(['bin/manage-cluster', 'status', '7000', '--allow-primary-failover']);
     }
 
+    public function testAllowReplicaReparentAddsTheCategoryToTheDefaults(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'chaos', '7000', '--allow-replica-reparent']);
+
+        self::assertNotNull($options->chaos);
+        self::assertTrue($options->chaos->allowReplicaReparent);
+        self::assertSame(
+            ['replica-kill', 'replica-restart', 'replica-add', 'replica-reparent'],
+            $options->chaos->categories,
+        );
+    }
+
+    public function testAllowReplicaReparentDoesNotDuplicateAnExplicitCategory(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse([
+            'bin/manage-cluster',
+            'chaos',
+            '7000',
+            '--categories',
+            'replica-reparent',
+            '--allow-replica-reparent',
+        ]);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame(['replica-reparent'], $options->chaos->categories);
+    }
+
+    public function testAllowReplicaReparentRequiresChaos(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--allow-replica-reparent can only be used with chaos.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--allow-replica-reparent']);
+    }
+
     public function testChaosRejectsUnknownSlotStrategy(): void
     {
         $parser = new CommandLineParser();

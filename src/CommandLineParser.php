@@ -103,7 +103,7 @@ final class CommandLineParser
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'chaos' => [
-            ['--categories LIST', 'Allowed events: replica-kill,replica-restart,replica-remove,replica-add,slot-migration,primary-failover'],
+            ['--categories LIST', 'Allowed events: replica-kill,replica-restart,replica-remove,replica-add,replica-reparent,slot-migration,primary-failover'],
             ['--interval SECONDS', 'Minimum time between completed chaos steps (default: 8)'],
             ['--max-events N', 'Stop after N completed events (default: unlimited)'],
             ['--max-failures N', 'Abort after N consecutive failures (default: 5)'],
@@ -114,6 +114,7 @@ final class CommandLineParser
             ['--cooldown SECONDS', 'Quiet period after convergence (default: 2)'],
             ['--allow-slot-migration', 'Add slot-migration to the allowed event categories'],
             ['--allow-primary-failover', 'Add primary-failover to the allowed event categories'],
+            ['--allow-replica-reparent', 'Add replica-reparent to the allowed event categories'],
             ['--slot-strategy NAME', 'Slot migration strategy: balanced (default) or random'],
             ['--slot-batch N', 'Maximum slots moved per slot-migration event (default: 16)'],
             ['--unsafe', 'Permit lower-redundancy actions normally avoided'],
@@ -193,6 +194,7 @@ final class CommandLineParser
             'chaos 7000 --categories slot-migration --slot-strategy random',
             'chaos 7000 --allow-primary-failover',
             'chaos 7000 --categories primary-failover --watch',
+            'chaos 7000 --allow-replica-reparent',
         ],
         'completions' => [
             'completions bash',
@@ -224,10 +226,11 @@ final class CommandLineParser
             '--all is scoped to failed replicas only; healthy replicas are left running.',
         ],
         'chaos' => [
-            'chaos executes replica kill, restart, and add plus bounded slot migration and coordinated primary failover.',
+            'chaos executes replica kill, restart, add, and reparent plus bounded slot migration and coordinated primary failover.',
             'When --dry-run is used without --max-events, the command prints one planned event and exits.',
             'slot-migration is opt-in through --categories or --allow-slot-migration.',
             'primary-failover is opt-in through --categories or --allow-primary-failover and promotes a caught-up replica with CLUSTER FAILOVER.',
+            'replica-reparent is opt-in through --categories or --allow-replica-reparent and moves a live replica to another primary with CLUSTER REPLICATE.',
             '--slot-strategy balanced keeps ownership even; random ignores the distribution and fragments it.',
             'replica-remove is parsed but remains disabled in conservative v1 selection.',
         ],
@@ -292,6 +295,7 @@ final class CommandLineParser
         $chaosCooldown = 2;
         $chaosAllowSlotMigration = false;
         $chaosAllowPrimaryFailover = false;
+        $chaosAllowReplicaReparent = false;
         $chaosSlotStrategy = SlotMigrationStrategy::Balanced;
         $chaosSlotStrategyProvided = false;
         $chaosSlotBatch = ChaosOptions::DEFAULT_SLOT_MIGRATION_BATCH;
@@ -432,6 +436,10 @@ final class CommandLineParser
 
                 case '--allow-primary-failover':
                     $chaosAllowPrimaryFailover = true;
+                    break;
+
+                case '--allow-replica-reparent':
+                    $chaosAllowReplicaReparent = true;
                     break;
 
                 case '--slot-strategy':
@@ -653,6 +661,10 @@ final class CommandLineParser
             throw new InvalidArgumentException('--allow-primary-failover can only be used with chaos.');
         }
 
+        if ($action !== 'chaos' && $chaosAllowReplicaReparent) {
+            throw new InvalidArgumentException('--allow-replica-reparent can only be used with chaos.');
+        }
+
         if ($action !== 'chaos' && $chaosSlotStrategyProvided) {
             throw new InvalidArgumentException('--slot-strategy can only be used with chaos.');
         }
@@ -814,6 +826,10 @@ final class CommandLineParser
             $chaosCategories = [...$chaosCategories, ChaosOptions::CATEGORY_PRIMARY_FAILOVER];
         }
 
+        if ($chaosAllowReplicaReparent && !in_array(ChaosOptions::CATEGORY_REPLICA_REPARENT, $chaosCategories, true)) {
+            $chaosCategories = [...$chaosCategories, ChaosOptions::CATEGORY_REPLICA_REPARENT];
+        }
+
         $chaosOptions = null;
         if ($action === 'chaos') {
             $chaosOptions = new ChaosOptions(
@@ -828,6 +844,7 @@ final class CommandLineParser
                 cooldownSeconds: $chaosCooldown,
                 allowSlotMigration: $chaosAllowSlotMigration,
                 allowPrimaryFailover: $chaosAllowPrimaryFailover,
+                allowReplicaReparent: $chaosAllowReplicaReparent,
                 unsafe: $chaosUnsafe,
                 slotMigrationStrategy: $chaosSlotStrategy,
                 slotMigrationBatch: $chaosSlotBatch,

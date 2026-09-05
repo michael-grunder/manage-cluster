@@ -31,11 +31,12 @@ final readonly class ChaosNodeState
     }
 
     /**
-     * A promotion target for a coordinated failover: a managed replica that is
-     * attached, caught up enough to be visible, and not already in the middle
-     * of a failover, sync, or load.
+     * A managed replica that is attached and idle: reachable, not failed,
+     * handshaking, loading, syncing, or already failing over, with its
+     * replication link up. Promotion and reparenting both need this baseline
+     * before they touch the node.
      */
-    public function isPromotableReplica(): bool
+    public function isStableManagedReplica(): bool
     {
         return $this->role === 'replica'
             && $this->managed

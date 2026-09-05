@@ -42,6 +42,7 @@ chosen based on:
 `bin/manage-cluster chaos 7000 --allow-slot-migration --slot-batch 32`
 `bin/manage-cluster chaos 7000 --categories slot-migration --slot-strategy random`
 `bin/manage-cluster chaos 7000 --allow-primary-failover`
+`bin/manage-cluster chaos 7000 --allow-replica-reparent`
 
 ### Options
 - `--categories LIST`
@@ -52,6 +53,7 @@ chosen based on:
   - `replica-restart`
   - `replica-remove`
   - `replica-add`
+  - `replica-reparent`
   - `slot-migration`
   - `primary-failover`
 
@@ -66,6 +68,8 @@ chosen based on:
   - `primary-failover` is implemented as a coordinated promotion only, and
     stays out of the default set; enable it here or with
     `--allow-primary-failover`.
+  - `replica-reparent` is implemented and stays out of the default set; enable
+    it here or with `--allow-replica-reparent`.
 
 - `--interval SECONDS`
   Minimum time between completed chaos steps.
@@ -105,6 +109,10 @@ chosen based on:
 - `--allow-primary-failover`
   Explicit opt-in that adds `primary-failover` to the allowed categories, so
   the replica categories do not have to be restated in `--categories`.
+
+- `--allow-replica-reparent`
+  Explicit opt-in that adds `replica-reparent` to the allowed categories, so
+  the other replica categories do not have to be restated in `--categories`.
 
 - `--slot-strategy balanced|random`
   How a slot-migration event chooses its source, destination, and slots.
@@ -583,6 +591,56 @@ repeated role reversals and connection reuse both get exercised over a run.
 
 ---
 
+## 7. `replica-reparent`
+
+### Purpose
+Move a live replica to a different primary with `CLUSTER REPLICATE`, without
+stopping or replacing anything. The replica keeps its process, endpoint, and
+node ID, so a client holding the donor shard's replica list still reaches a
+server that answers normally but no longer belongs to that shard. This is the
+direct test of whether a client remaps the keyspace behind a replica it already
+knows, and it is a different invalidation path from killing that endpoint.
+
+### Status
+Implemented. Off by default; enabled with `--allow-replica-reparent` or by
+naming `replica-reparent` in `--categories`.
+
+### Candidate eligibility
+A move may be selected only if:
+- the replica is managed, currently attached, reachable, not failed,
+  handshaking, loading, or syncing, and reports `master_link_status:up`
+- the donor primary is reachable and keeps at least one other healthy replica
+  after the move; `--unsafe` allows draining the donor to zero
+- the recipient is a different reachable primary that owns slots and is not
+  failed, handshaking, loading, or failing over
+- at least two reachable primaries own slots
+- no inflight mutation exists
+- the user enabled the category explicitly
+
+Like `primary-failover`, this does not require a fully settled cluster, since no
+process stops. Without `--unsafe` it is still blocked while any primary is
+unreachable or failed, or any node is handshaking.
+
+### Execution
+- send `CLUSTER REPLICATE <recipient node id>` to the replica
+- record the replica's node ID plus both primaries as they were before the move
+- transition to `waiting`
+
+### Postcondition
+Wait for:
+- the same node ID still answering at the replica's port
+- the recipient shard listing the replica, and the donor no longer listing it
+- the replica's replication link to its new primary up and not syncing
+- cluster not reporting `CLUSTERDOWN`
+
+### Notes
+Selection prefers a recipient with no healthy replicas, deprioritizes moving a
+replica that the previous event already moved, and later prefers returning a
+replica to the shard it came from, so both a retained layout and a restored one
+get exercised over a run.
+
+---
+
 ## Event selection policy
 
 Each loop must:
@@ -606,6 +664,8 @@ Example scoring ideas:
 - +3 add a replica to a degraded primary
 - +2 kill a healthy replica on a currently stable primary
 - +2 promote a primary that an earlier failover demoted
+- +3 reparent a replica onto a primary with zero healthy replicas
+- -3 move a replica the previous event already moved
 - -3 fail a shard back immediately after promoting it
 - -5 any event that would create a second degraded primary
 - -10 any event blocked by sync or instability

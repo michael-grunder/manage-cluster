@@ -22,10 +22,11 @@ final class ShellCompletionGeneratorTest extends TestCase
         self::assertStringContainsString('compgen -W "balanced random"', $script);
         self::assertStringContainsString('--categories)', $script);
         self::assertStringContainsString(
-            'compgen -W "replica-kill replica-restart replica-remove replica-add slot-migration primary-failover"',
+            'compgen -W "replica-kill replica-restart replica-remove replica-add replica-reparent slot-migration primary-failover"',
             $script,
         );
         self::assertStringContainsString('--allow-primary-failover', $script);
+        self::assertStringContainsString('--allow-replica-reparent', $script);
     }
 
     public function testGeneratesZshCompletionScript(): void
@@ -39,6 +40,7 @@ final class ShellCompletionGeneratorTest extends TestCase
         self::assertStringContainsString("'zsh'", $script);
         self::assertStringContainsString("'--slot-strategy'", $script);
         self::assertStringContainsString("'--allow-primary-failover'", $script);
+        self::assertStringContainsString("'--allow-replica-reparent'", $script);
         self::assertStringContainsString('compdef _manage_cluster manage-cluster', $script);
         self::assertStringNotContainsString('_manage_cluster "$@"', $script);
     }

@@ -32,6 +32,8 @@ final class ClusterManager
         private readonly SlotMigrationPlanner $slotMigrationPlanner,
         private readonly PrimaryFailoverEligibility $primaryFailoverEligibility,
         private readonly PrimaryFailoverPlanner $primaryFailoverPlanner,
+        private readonly ReplicaReparentEligibility $replicaReparentEligibility,
+        private readonly ReplicaReparentPlanner $replicaReparentPlanner,
         private readonly SlotMigrator $slotMigrator,
         private readonly ConsoleOutput $output,
     ) {
@@ -1317,10 +1319,11 @@ final class ClusterManager
             ChaosOptions::CATEGORY_REPLICA_ADD,
             ChaosOptions::CATEGORY_SLOT_MIGRATION,
             ChaosOptions::CATEGORY_PRIMARY_FAILOVER,
+            ChaosOptions::CATEGORY_REPLICA_REPARENT,
         ];
 
         if (array_intersect($chaos->categories, $implementedCategories) === []) {
-            throw new RuntimeException('chaos currently implements replica-kill, replica-restart, replica-add, slot-migration, and primary-failover.');
+            throw new RuntimeException('chaos currently implements replica-kill, replica-restart, replica-add, replica-reparent, slot-migration, and primary-failover.');
         }
 
         if ($chaos->seed !== null) {
@@ -1898,6 +1901,12 @@ final class ClusterManager
             }
         }
 
+        if (in_array(ChaosOptions::CATEGORY_REPLICA_REPARENT, $chaos->categories, true)) {
+            foreach ($this->buildReplicaReparentCandidates($view, $runtime, $chaos) as $reparent) {
+                $candidates[] = $reparent;
+            }
+        }
+
         if ($candidates === []) {
             return null;
         }
@@ -2059,6 +2068,88 @@ final class ClusterManager
     }
 
     /**
+     * Reparenting keeps a replica's process, endpoint, and node ID while moving
+     * it to another shard, so a client that cached the donor's replica list
+     * still reaches a live server that no longer belongs there. That is a
+     * different invalidation path from killing the same endpoint.
+     *
+     * @return list<ChaosCandidateEvent>
+     */
+    private function buildReplicaReparentCandidates(
+        ChaosClusterView $view,
+        ChaosRuntimeState $runtime,
+        ChaosOptions $chaos,
+    ): array {
+        if ($this->replicaReparentEligibility->blockers($view, $chaos->unsafe) !== []) {
+            return [];
+        }
+
+        $candidates = [];
+        foreach ($this->replicaReparentPlanner->candidates($view, $chaos->unsafe) as $plan) {
+            $source = $view->primaryStateByPort[$plan->sourcePrimaryPort] ?? null;
+            $target = $view->primaryStateByPort[$plan->targetPrimaryPort] ?? null;
+            if (!$source instanceof ChaosPrimaryState || !$target instanceof ChaosPrimaryState) {
+                continue;
+            }
+
+            $score = 2;
+            $reasons = [sprintf(
+                'live replica %d can follow primary %d instead of %d without stopping',
+                $plan->replicaPort,
+                $plan->targetPrimaryPort,
+                $plan->sourcePrimaryPort,
+            )];
+
+            if ($target->isDegraded()) {
+                $score += 3;
+                $reasons[] = 'gives a primary with zero healthy replicas one to serve reads';
+            } elseif ($target->healthyReplicaCount < $source->healthyReplicaCount - 1) {
+                $score += 1;
+                $reasons[] = 'balances replica inventory toward a lower-redundancy primary';
+            }
+
+            if ($runtime->lastEventTargeted(ChaosOptions::CATEGORY_REPLICA_REPARENT, $plan->replicaPort)) {
+                // Let clients live with the new layout for a while instead of
+                // bouncing the same replica between two shards.
+                $score -= 3;
+                $reasons[] = 'the previous event already moved this replica, so moving it again is deprioritized';
+            } elseif ($this->wasReparentedAwayFrom($runtime, $plan->replicaPort, $plan->targetPrimaryPort)) {
+                $score += 1;
+                $reasons[] = 'restores the replica to the shard it was moved away from earlier';
+            }
+
+            $candidates[] = new ChaosCandidateEvent(
+                category: ChaosOptions::CATEGORY_REPLICA_REPARENT,
+                targetPort: $plan->replicaPort,
+                targetPrimaryPort: $plan->targetPrimaryPort,
+                score: $score,
+                summary: $plan->summary(),
+                postcondition: $plan->postcondition(),
+                reasons: $reasons,
+                replicaReparentPlan: $plan,
+            );
+        }
+
+        return $candidates;
+    }
+
+    private function wasReparentedAwayFrom(ChaosRuntimeState $runtime, int $replicaPort, int $primaryPort): bool
+    {
+        foreach ($runtime->history as $event) {
+            $plan = $event->replicaReparentPlan;
+            if ($event->status === 'completed'
+                && $plan instanceof ReplicaReparentPlan
+                && $plan->replicaPort === $replicaPort
+                && $plan->sourcePrimaryPort === $primaryPort
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * @param array<string, mixed> $metadata
      */
     private function executeChaosEvent(
@@ -2168,6 +2259,28 @@ final class ClusterManager
                 $this->redisNodeClient->clusterFailover($failoverPlan->replicaPort, $tls, $caCert);
                 break;
 
+            case ChaosOptions::CATEGORY_REPLICA_REPARENT:
+                $reparentPlan = $event->replicaReparentPlan;
+                if (!$reparentPlan instanceof ReplicaReparentPlan) {
+                    throw new RuntimeException('replica-reparent is missing a reparent plan.');
+                }
+
+                $this->output->step(sprintf(
+                    'Reparenting replica %d from primary %d to primary %d',
+                    $reparentPlan->replicaPort,
+                    $reparentPlan->sourcePrimaryPort,
+                    $reparentPlan->targetPrimaryPort,
+                ));
+
+                $this->redisNodeClient->clusterReplicate(
+                    $reparentPlan->replicaPort,
+                    $tls,
+                    $caCert,
+                    $reparentPlan->targetPrimaryNodeId,
+                );
+                $runtime->rememberReplicaPrimary($reparentPlan->replicaPort, $reparentPlan->targetPrimaryPort);
+                break;
+
             default:
                 throw new RuntimeException(sprintf('Unsupported chaos event category: %s', $event->category));
         }
@@ -2233,6 +2346,7 @@ final class ClusterManager
             ChaosOptions::CATEGORY_REPLICA_ADD => $this->isReplicaAddSatisfied($event, $view),
             ChaosOptions::CATEGORY_SLOT_MIGRATION => $this->isSlotMigrationSatisfied($event, $view),
             ChaosOptions::CATEGORY_PRIMARY_FAILOVER => $this->isPrimaryFailoverSatisfied($event, $view),
+            ChaosOptions::CATEGORY_REPLICA_REPARENT => $this->isReplicaReparentSatisfied($event, $view),
             default => false,
         };
     }
@@ -2302,6 +2416,46 @@ final class ClusterManager
             && !$demoted->isSyncing;
     }
 
+    /**
+     * A reparent is done when the same node ID answers at the same port, the
+     * new shard lists it, and the old shard no longer does. Requiring the
+     * replication link to be up as well keeps chaos from stacking another
+     * mutation on a replica that is still synchronizing from its new primary.
+     */
+    private function isReplicaReparentSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
+    {
+        $plan = $event->replicaReparentPlan;
+        if (!$plan instanceof ReplicaReparentPlan || $view->clusterDown) {
+            return false;
+        }
+
+        $replica = $view->nodeStateByPort[$plan->replicaPort] ?? null;
+        if (!$replica instanceof ChaosNodeState || !$replica->isStableManagedReplica()) {
+            return false;
+        }
+
+        if ($replica->primaryPort !== $plan->targetPrimaryPort) {
+            return false;
+        }
+
+        if ($plan->replicaNodeId !== '' && $replica->nodeId !== $plan->replicaNodeId) {
+            return false;
+        }
+
+        $target = $view->primaryStateByPort[$plan->targetPrimaryPort] ?? null;
+        if (!$target instanceof ChaosPrimaryState || !$target->reachable) {
+            return false;
+        }
+
+        if (!in_array($plan->replicaPort, $target->replicaPorts, true)) {
+            return false;
+        }
+
+        $source = $view->primaryStateByPort[$plan->sourcePrimaryPort] ?? null;
+
+        return !$source instanceof ChaosPrimaryState || !in_array($plan->replicaPort, $source->replicaPorts, true);
+    }
+
     private function isReplicaKillSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
     {
         $primaryPort = $event->targetPrimaryPort;
@@ -2368,6 +2522,15 @@ final class ClusterManager
             $lines[] = sprintf('primary-failover blocked: %s', implode('; ', $blockers));
         }
 
+        if (in_array(ChaosOptions::CATEGORY_REPLICA_REPARENT, $chaos->categories, true)) {
+            $blockers = $this->replicaReparentEligibility->blockers($view, $chaos->unsafe);
+            if ($blockers === []) {
+                $blockers[] = 'no spare healthy replica and slot-owning recipient';
+            }
+
+            $lines[] = sprintf('replica-reparent blocked: %s', implode('; ', $blockers));
+        }
+
         if ($lines === []) {
             return '[wait ] no eligible events';
         }
@@ -2385,6 +2548,11 @@ final class ClusterManager
         $failoverPlan = $event->primaryFailoverPlan;
         if ($event->category === ChaosOptions::CATEGORY_PRIMARY_FAILOVER && $failoverPlan instanceof PrimaryFailoverPlan) {
             return $this->formatPrimaryFailoverWaitLine($event->id, $failoverPlan, $view);
+        }
+
+        $reparentPlan = $event->replicaReparentPlan;
+        if ($event->category === ChaosOptions::CATEGORY_REPLICA_REPARENT && $reparentPlan instanceof ReplicaReparentPlan) {
+            return $this->formatReplicaReparentWaitLine($event->id, $reparentPlan, $view);
         }
 
         $target = $event->targetPort !== null ? ($view->nodeStateByPort[$event->targetPort] ?? null) : null;
@@ -2420,6 +2588,26 @@ final class ClusterManager
             $plan->primaryPort,
             $demoted instanceof ChaosNodeState ? $demoted->role : 'unknown',
             $demoted instanceof ChaosNodeState && $demoted->primaryPort !== null ? (string) $demoted->primaryPort : '-',
+            $view->clusterDown ? 'down' : 'ok',
+        );
+    }
+
+    private function formatReplicaReparentWaitLine(int $eventId, ReplicaReparentPlan $plan, ChaosClusterView $view): string
+    {
+        $replica = $view->nodeStateByPort[$plan->replicaPort] ?? null;
+        $source = $view->primaryStateByPort[$plan->sourcePrimaryPort] ?? null;
+        $target = $view->primaryStateByPort[$plan->targetPrimaryPort] ?? null;
+
+        return sprintf(
+            '[wait ] event#%d replica=%d follows=%s link=%s from=%d listed=%s to=%d listed=%s cluster=%s',
+            $eventId,
+            $plan->replicaPort,
+            $replica instanceof ChaosNodeState && $replica->primaryPort !== null ? (string) $replica->primaryPort : '-',
+            $replica instanceof ChaosNodeState && $replica->linkStatus !== '' ? $replica->linkStatus : '-',
+            $plan->sourcePrimaryPort,
+            $source instanceof ChaosPrimaryState && in_array($plan->replicaPort, $source->replicaPorts, true) ? '1' : '0',
+            $plan->targetPrimaryPort,
+            $target instanceof ChaosPrimaryState && in_array($plan->replicaPort, $target->replicaPorts, true) ? '1' : '0',
             $view->clusterDown ? 'down' : 'ok',
         );
     }

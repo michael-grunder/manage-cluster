@@ -60,45 +60,6 @@ final readonly class PrimaryFailoverEligibility
             return $blockers;
         }
 
-        $unreachablePrimaries = [];
-        $failedPrimaries = [];
-        $handshaking = [];
-
-        foreach ($view->nodeStateByPort as $port => $node) {
-            if (!$node->knownByCluster) {
-                continue;
-            }
-
-            if ($node->isHandshake) {
-                $handshaking[] = $port;
-            }
-
-            if ($node->role !== 'primary') {
-                continue;
-            }
-
-            if (!$node->reachable) {
-                $unreachablePrimaries[] = $port;
-            }
-
-            if ($node->isFailed) {
-                $failedPrimaries[] = $port;
-            }
-        }
-
-        foreach ([
-            'unreachable primaries' => $unreachablePrimaries,
-            'failed primaries' => $failedPrimaries,
-            'handshaking nodes' => $handshaking,
-        ] as $label => $ports) {
-            if ($ports === []) {
-                continue;
-            }
-
-            sort($ports, SORT_NUMERIC);
-            $blockers[] = sprintf('%s=%s', $label, implode(',', array_map('strval', $ports)));
-        }
-
-        return $blockers;
+        return [...$blockers, ...ChaosSettlementBlockers::unsettledMembership($view)];
     }
 }
