@@ -8,6 +8,11 @@
             "Mgrunder\\CreateCluster\\": "src/"
         }
     },
+    "autoload-dev": {
+        "psr-4": {
+            "Mgrunder\\CreateCluster\\Tests\\": "tests/"
+        }
+    },
     "authors": [
         {
             "name": "michael-grunder",

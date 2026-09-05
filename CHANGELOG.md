@@ -15,12 +15,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   printing the line-by-line log, so redirecting to a file still works.
 - `chaos --categories all` enables every event category without enumerating
   them, and `all` can also be mixed into a comma-separated list.
+- `chaos --abort-on-failure` stops the run at the first failed event, for
+  scripted runs that want a failure to be fatal.
+- An opt-in integration suite, `vendor/bin/phpunit --testsuite integration`,
+  drives each destructive chaos category against a real cluster and asserts the
+  topology it leaves behind. It provisions a throwaway cluster on a free port
+  range by default, or attaches to an existing one through
+  `MANAGE_CLUSTER_IT_PORTS`. `vendor/bin/phpunit` still runs the unit suite
+  only.
 
 ### Fixed
 - `chaos --categories primary-failover,replica-reparent,primary-add,primary-remove`
   now runs those events instead of aborting after `--max-failures` with
   "<category> is missing a ... plan". The chosen event kept only slot-migration
   plans, so every other planned category lost its plan before execution.
+- `chaos --categories primary-add` no longer fails with "CLUSTER SETSLOT <slot>
+  NODE failed on Redis node at port N". The new primary was announced to every
+  reachable primary as soon as the donor had met it, so any node that had not
+  yet learned the new node ID through gossip rejected the slot handover. Every
+  node that gets told about the new owner is now waited for first.
 - `chaos` now reloads managed cluster metadata before each event, so ports added
   or removed during a run are tracked instead of the run acting on the port list
   it started with.
@@ -30,6 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identifies the exact blocking conditions and ports.
 
 ### Changed
+- `chaos` no longer gives up after five consecutive failures. A failed event is
+  now reported in red and the run continues, so one ineligible or broken event
+  does not end a long soak. `--max-failures` still sets a ceiling but defaults
+  to unlimited, and `--abort-on-failure` restores stop-on-first-failure.
+- `chaos` now reports why it has nothing to do. A run that can never plan an
+  event, such as `--categories replica-reparent` against a cluster whose
+  primaries each have a single replica, prints the blocking reason instead of
+  waiting silently until it is interrupted.
 - `chaos --watch` now routes step and progress messages, including slot
   migration progress, into the event log instead of printing them over the
   live view.

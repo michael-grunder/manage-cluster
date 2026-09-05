@@ -361,7 +361,11 @@ Useful options:
   `replica-add`, and every other category is opt-in
 - `--interval SECONDS` sets the minimum time between completed steps
 - `--max-events N` stops after N completed events
-- `--max-failures N` aborts after N consecutive execution or convergence failures
+- `--max-failures N` aborts after N consecutive execution or convergence
+  failures; the default is unlimited, and `0` also means unlimited
+- `--abort-on-failure` stops at the first failed event. By default a failed
+  event is reported in red and the run continues, so one uneligible or broken
+  event does not end a long soak
 - `--dry-run` prints the next planned event without mutating the cluster
 - `--watch` opens a fullscreen `php-tui` view: live cluster topology on top,
   the sequence of chaos events underneath (see below)
@@ -714,6 +718,31 @@ php -l src/*.php
 vendor/bin/phpstan analyze
 vendor/bin/phpunit
 ```
+
+### Integration tests
+
+`vendor/bin/phpunit` runs the unit suite only. A second, opt-in suite drives
+each destructive chaos category against a real cluster and asserts the topology
+it leaves behind:
+
+```bash
+vendor/bin/phpunit --testsuite integration
+```
+
+By default each test provisions a throwaway cluster on a free contiguous port
+range, with its own state directory, and stops and deletes it afterwards. It
+needs `redis-server` (or `valkey-server`) on `PATH` and the `redis` PHP
+extension.
+
+To iterate against a cluster that is already running, point the suite at it:
+
+```bash
+MANAGE_CLUSTER_IT_PORTS=7000-7011 vendor/bin/phpunit --testsuite integration
+```
+
+An attached cluster is never stopped or deleted by the suite, but it is
+permanently reshaped: `primary-add` and `primary-remove` change which nodes own
+slots. Only attach a cluster you are willing to lose the topology of.
 
 ## Release Notes
 

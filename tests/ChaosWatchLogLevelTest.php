@@ -51,6 +51,29 @@ final class ChaosWatchLogLevelTest extends TestCase
         yield 'failure is always shown' => [ChaosWatchLogLevel::Failure, false];
     }
 
+    #[DataProvider('plainSeverityCases')]
+    public function testWatchLevelsMapOntoPlainConsoleSeverities(
+        ChaosWatchLogLevel $level,
+        ConsoleOutputLevel $expected,
+    ): void {
+        self::assertSame($expected, $level->toConsoleOutputLevel());
+    }
+
+    /**
+     * @return iterable<string, array{ChaosWatchLogLevel, ConsoleOutputLevel}>
+     */
+    public static function plainSeverityCases(): iterable
+    {
+        yield 'failure prints as an error' => [ChaosWatchLogLevel::Failure, ConsoleOutputLevel::Error];
+        yield 'warning prints as a warning' => [ChaosWatchLogLevel::Warning, ConsoleOutputLevel::Warning];
+        yield 'event prints as info' => [ChaosWatchLogLevel::Event, ConsoleOutputLevel::Info];
+        yield 'plan prints as info' => [ChaosWatchLogLevel::Plan, ConsoleOutputLevel::Info];
+        yield 'done prints as info' => [ChaosWatchLogLevel::Done, ConsoleOutputLevel::Info];
+        yield 'progress prints as info' => [ChaosWatchLogLevel::Progress, ConsoleOutputLevel::Info];
+        yield 'waiting prints as info' => [ChaosWatchLogLevel::Waiting, ConsoleOutputLevel::Info];
+        yield 'info prints as info' => [ChaosWatchLogLevel::Info, ConsoleOutputLevel::Info];
+    }
+
     #[DataProvider('consoleOutputLevelCases')]
     public function testConsoleOutputLevelsMapOntoWatchLevels(ConsoleOutputLevel $level, ChaosWatchLogLevel $expected): void
     {

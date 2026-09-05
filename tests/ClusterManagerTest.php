@@ -566,6 +566,7 @@ MESSAGE);
             intervalSeconds: 8,
             maxEvents: null,
             maxFailures: 5,
+            abortOnFailure: false,
             dryRun: false,
             watch: false,
             seed: null,

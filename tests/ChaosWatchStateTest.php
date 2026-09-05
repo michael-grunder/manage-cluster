@@ -178,6 +178,7 @@ final class ChaosWatchStateTest extends TestCase
             intervalSeconds: 5,
             maxEvents: null,
             maxFailures: 3,
+            abortOnFailure: false,
             dryRun: false,
             watch: true,
             seed: null,

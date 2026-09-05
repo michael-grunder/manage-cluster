@@ -7,10 +7,16 @@
          executionOrder="depends,defects"
          failOnPhpunitDeprecation="true"
          failOnRisky="true"
-         failOnWarning="true">
+         failOnWarning="true"
+         defaultTestSuite="default">
     <testsuites>
         <testsuite name="default">
             <directory>tests</directory>
+            <exclude>tests/Integration</exclude>
+        </testsuite>
+        <!-- Opt-in only: these start real Redis nodes and churn them. -->
+        <testsuite name="integration">
+            <directory>tests/Integration</directory>
         </testsuite>
     </testsuites>
 

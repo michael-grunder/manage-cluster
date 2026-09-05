@@ -329,6 +329,7 @@ final class ChaosWatchTuiRendererTest extends TestCase
             intervalSeconds: 5,
             maxEvents: 20,
             maxFailures: 3,
+            abortOnFailure: false,
             dryRun: false,
             watch: true,
             seed: null,

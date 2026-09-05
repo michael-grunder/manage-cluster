@@ -31,6 +31,20 @@ enum ChaosWatchLogLevel: string
     }
 
     /**
+     * Severity the line-oriented chaos log prints this level at, so a failed
+     * event is as visible without `--watch` as the red line the watch view
+     * already gives it.
+     */
+    public function toConsoleOutputLevel(): ConsoleOutputLevel
+    {
+        return match ($this) {
+            self::Failure => ConsoleOutputLevel::Error,
+            self::Warning => ConsoleOutputLevel::Warning,
+            default => ConsoleOutputLevel::Info,
+        };
+    }
+
+    /**
      * Prefix the line-oriented chaos log uses. Only the levels that describe a
      * whole event are prefixed; progress and poll chatter stays unadorned.
      */

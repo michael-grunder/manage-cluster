@@ -693,6 +693,7 @@ final class CommandLineParserTest extends TestCase
             'random',
             '--slot-batch',
             '48',
+            '--abort-on-failure',
             '--unsafe',
         ]);
 
@@ -708,7 +709,41 @@ final class CommandLineParserTest extends TestCase
         self::assertSame(4, $options->chaos->cooldownSeconds);
         self::assertSame(SlotMigrationStrategy::Random, $options->chaos->slotMigrationStrategy);
         self::assertSame(48, $options->chaos->slotMigrationBatch);
+        self::assertTrue($options->chaos->abortOnFailure);
         self::assertTrue($options->chaos->unsafe);
+    }
+
+    public function testChaosKeepsRunningThroughFailuresByDefault(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'chaos', '7000']);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame(ChaosOptions::UNLIMITED_FAILURES, $options->chaos->maxFailures);
+        self::assertFalse($options->chaos->abortOnFailure);
+        self::assertFalse($options->chaos->shouldAbortAfterFailures(50));
+    }
+
+    public function testChaosAcceptsAnExplicitUnlimitedFailureCeiling(): void
+    {
+        $parser = new CommandLineParser();
+
+        $options = $parser->parse(['bin/manage-cluster', 'chaos', '7000', '--max-failures', '0']);
+
+        self::assertNotNull($options->chaos);
+        self::assertSame(ChaosOptions::UNLIMITED_FAILURES, $options->chaos->maxFailures);
+        self::assertFalse($options->chaos->shouldAbortAfterFailures(99));
+    }
+
+    public function testAbortOnFailureIsRejectedOutsideChaos(): void
+    {
+        $parser = new CommandLineParser();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--abort-on-failure can only be used with chaos.');
+
+        $parser->parse(['bin/manage-cluster', 'status', '7000', '--abort-on-failure']);
     }
 
     public function testParsesStartServerArgsAfterDoubleDash(): void

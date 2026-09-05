@@ -105,6 +105,22 @@ final class ConsoleOutput
         );
     }
 
+    /**
+     * Print a message at a level chosen at runtime. Callers that classify their
+     * own output, such as the chaos event log, use this instead of picking one
+     * of the fixed helpers above.
+     */
+    public function write(ConsoleOutputLevel $level, string $message): void
+    {
+        match ($level) {
+            ConsoleOutputLevel::Step, ConsoleOutputLevel::Progress => $this->step($message),
+            ConsoleOutputLevel::Info, ConsoleOutputLevel::Detail => $this->info($message),
+            ConsoleOutputLevel::Success => $this->success($message),
+            ConsoleOutputLevel::Warning => $this->warning($message),
+            ConsoleOutputLevel::Error => $this->error($message),
+        };
+    }
+
     public function detail(string $label, string $value): void
     {
         if ($this->sink !== null) {

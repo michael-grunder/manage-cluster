@@ -107,7 +107,8 @@ final class CommandLineParser
             ['--categories LIST', 'Allowed event categories, or all (default: %chaos-default-categories%)'],
             ['--interval SECONDS', 'Minimum time between completed chaos steps (default: 8)'],
             ['--max-events N', 'Stop after N completed events (default: unlimited)'],
-            ['--max-failures N', 'Abort after N consecutive failures (default: 5)'],
+            ['--max-failures N', 'Abort after N consecutive failures (default: unlimited)'],
+            ['--abort-on-failure', 'Stop at the first failed event instead of reporting it and continuing'],
             ['--dry-run', 'Select and print events without mutating cluster state'],
             ['--watch', 'Open a fullscreen live view of topology and chaos events'],
             ['--seed N', 'PRNG seed for reproducible event selection'],
@@ -301,7 +302,8 @@ final class CommandLineParser
         $chaosCategories = ChaosOptions::DEFAULT_CATEGORIES;
         $chaosInterval = 8;
         $chaosMaxEvents = null;
-        $chaosMaxFailures = 5;
+        $chaosMaxFailures = ChaosOptions::UNLIMITED_FAILURES;
+        $chaosAbortOnFailure = false;
         $chaosDryRun = false;
         $chaosSeed = null;
         $chaosWaitTimeout = 60;
@@ -436,6 +438,10 @@ final class CommandLineParser
 
                 case '--max-failures':
                     $chaosMaxFailures = $this->parseIntOption($argv, ++$i, '--max-failures');
+                    break;
+
+                case '--abort-on-failure':
+                    $chaosAbortOnFailure = true;
                     break;
 
                 case '--dry-run':
@@ -665,8 +671,12 @@ final class CommandLineParser
             throw new InvalidArgumentException('--max-events can only be used with chaos.');
         }
 
-        if ($action !== 'chaos' && $chaosMaxFailures !== 5) {
+        if ($action !== 'chaos' && $chaosMaxFailures !== ChaosOptions::UNLIMITED_FAILURES) {
             throw new InvalidArgumentException('--max-failures can only be used with chaos.');
+        }
+
+        if ($action !== 'chaos' && $chaosAbortOnFailure) {
+            throw new InvalidArgumentException('--abort-on-failure can only be used with chaos.');
         }
 
         if ($action !== 'chaos' && $chaosDryRun) {
@@ -846,8 +856,8 @@ final class CommandLineParser
             throw new InvalidArgumentException('--max-events must be > 0.');
         }
 
-        if ($chaosMaxFailures <= 0) {
-            throw new InvalidArgumentException('--max-failures must be > 0.');
+        if ($chaosMaxFailures < ChaosOptions::UNLIMITED_FAILURES) {
+            throw new InvalidArgumentException('--max-failures must be >= 0.');
         }
 
         if ($chaosWaitTimeout <= 0) {
@@ -889,6 +899,7 @@ final class CommandLineParser
                 intervalSeconds: $chaosInterval,
                 maxEvents: $chaosMaxEvents,
                 maxFailures: $chaosMaxFailures,
+                abortOnFailure: $chaosAbortOnFailure,
                 dryRun: $chaosDryRun,
                 watch: $watch,
                 seed: $chaosSeed,

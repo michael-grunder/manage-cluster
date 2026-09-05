@@ -1389,6 +1389,7 @@ final class ClusterManager
         ?string $caCert,
     ): void {
         $dryRunBudget = $chaos->dryRun && $chaos->maxEvents === null ? 1 : $chaos->maxEvents;
+        $lastIdleReason = null;
 
         while (true) {
             if ($dryRunBudget !== null && $runtime->completedEventCount() >= $dryRunBudget) {
@@ -1415,10 +1416,23 @@ final class ClusterManager
 
             $candidate = $this->selectChaosCandidate($view, $runtime, $chaos);
             if (!$candidate instanceof ChaosCandidateEvent) {
-                $this->emitChaosWatchLine($chaos, ChaosWatchLogLevel::Waiting, $this->formatNoEligibleChaosEventsLine($view, $chaos));
+                $idleReason = $this->formatNoEligibleChaosEventsLine($view, $chaos);
+
+                // Without --watch the poll chatter is suppressed, which used to
+                // make an idle run indistinguishable from a hung one. Report
+                // each distinct reason once so a run that can never plan an
+                // event says so instead of sitting silent.
+                $this->emitChaosWatchLine(
+                    $chaos,
+                    $idleReason === $lastIdleReason ? ChaosWatchLogLevel::Waiting : ChaosWatchLogLevel::Warning,
+                    $idleReason,
+                );
+                $lastIdleReason = $idleReason;
                 $this->pauseChaos(1.0);
                 continue;
             }
+
+            $lastIdleReason = null;
 
             $event = ChaosEventRecord::fromCandidate(
                 id: $runtime->nextEventId(),
@@ -1466,7 +1480,7 @@ final class ClusterManager
                 $runtime->rememberHistory($failed);
                 $runtime->inflightEvent = null;
 
-                if ($runtime->consecutiveFailures >= $chaos->maxFailures) {
+                if ($chaos->shouldAbortAfterFailures($runtime->consecutiveFailures)) {
                     throw new RuntimeException(sprintf(
                         'Chaos aborted after %d consecutive failures. Last error: %s',
                         $runtime->consecutiveFailures,
@@ -1474,7 +1488,12 @@ final class ClusterManager
                     ), previous: $exception);
                 }
 
-                $this->output->warning($exception->getMessage());
+                $this->emitChaosWatchLine($chaos, ChaosWatchLogLevel::Failure, sprintf(
+                    'event#%d %s failed: %s',
+                    $failed->id,
+                    $failed->category,
+                    $exception->getMessage(),
+                ));
                 $this->pauseChaos(1.0);
                 continue;
             }
@@ -2651,11 +2670,24 @@ final class ClusterManager
             ranges: $plan->ranges,
         );
 
-        $notifyPorts = [...$this->reachablePrimaryPorts($view), $plan->newPrimaryPort];
+        $notifyPorts = array_values(array_unique([...$this->reachablePrimaryPorts($view), $plan->newPrimaryPort]));
+
+        // Every notified primary is about to be told the new node owns slots,
+        // and `CLUSTER SETSLOT ... NODE` is rejected by any node that has not
+        // learned that node ID yet. Meeting the donor only guarantees the donor
+        // knows it, so wait for the rest of the gossip to catch up first.
+        foreach ($notifyPorts as $notifyPort) {
+            if ($notifyPort === $plan->newPrimaryPort) {
+                continue;
+            }
+
+            $this->redisNodeClient->waitForKnownClusterNode($notifyPort, $tls, $caCert, $newNodeId);
+        }
+
         $this->slotMigrator->migrate(
             plan: $migration,
             destinationHost: $this->resolveNodeHostByPort($view->seedPort, $plan->newPrimaryPort, $tls, $caCert),
-            notifyPorts: array_values(array_unique($notifyPorts)),
+            notifyPorts: $notifyPorts,
             tls: $tls,
             caCert: $caCert,
         );
@@ -3082,7 +3114,7 @@ final class ClusterManager
             return;
         }
 
-        $this->output->info($level->plainPrefix() . $message);
+        $this->output->write($level->toConsoleOutputLevel(), $level->plainPrefix() . $message);
     }
 
     /**
