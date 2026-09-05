@@ -13,6 +13,12 @@ final class ClusterManager
     private const int CHAOS_STABLE_POLLS = 2;
     private const int CHAOS_PRIMARY_REPLICA_CAP = 2;
     private const int CHAOS_PRIMARY_CAP = 6;
+
+    /**
+     * Score a candidate gives up for each time the recency window already
+     * aimed its category at the same target.
+     */
+    private const int CHAOS_REPEAT_PENALTY = 3;
     private const float STOP_SHUTDOWN_GRACE_SECONDS = 2.0;
     private const float STOP_SIGNAL_WAIT_SECONDS = 1.0;
     private const int REPLICA_STATE_WAIT_POLL_MICROSECONDS = 250_000;
@@ -36,6 +42,7 @@ final class ClusterManager
         private readonly ManagedClusterSummaryRenderer $managedClusterSummaryRenderer,
         private readonly ManagedClusterSummaryTuiRenderer $managedClusterSummaryTuiRenderer,
         private readonly ClusterTreeSelector $clusterTreeSelector,
+        private readonly ChaosCandidateSelector $chaosCandidateSelector,
         private readonly SlotMigrationEligibility $slotMigrationEligibility,
         private readonly SlotMigrationPlanner $slotMigrationPlanner,
         private readonly PrimaryFailoverEligibility $primaryFailoverEligibility,
@@ -1967,8 +1974,10 @@ final class ClusterManager
                     $reasons[] = 'repairs an earlier intentional kill';
                 }
 
-                if ($runtime->lastEventTargeted(ChaosOptions::CATEGORY_REPLICA_RESTART, $replicaPort)) {
-                    $score -= 3;
+                $repeatPenalty = $this->chaosRepeatPenalty($runtime, ChaosOptions::CATEGORY_REPLICA_RESTART, $replicaPort);
+                if ($repeatPenalty > 0) {
+                    $score -= $repeatPenalty;
+                    $reasons[] = 'chaos already restarted this replica recently';
                 }
 
                 $candidates[] = new ChaosCandidateEvent(
@@ -2008,7 +2017,10 @@ final class ClusterManager
                     $reasons[] = 'balances replica inventory toward a lower-redundancy primary';
                 }
 
-                $latestKill = $runtime->mostRecentMatching(ChaosOptions::CATEGORY_REPLICA_KILL);
+                $latestKill = $runtime->mostRecentMatching(
+                    ChaosOptions::CATEGORY_REPLICA_KILL,
+                    window: ChaosRuntimeState::RECENCY_WINDOW,
+                );
                 if ($latestKill instanceof ChaosEventRecord && $latestKill->targetPrimaryPort === $primaryPort) {
                     $score += 2;
                     $reasons[] = 'follows up on a recent replica loss on this primary';
@@ -2053,8 +2065,10 @@ final class ClusterManager
                     continue;
                 }
 
-                if ($runtime->lastEventTargeted(ChaosOptions::CATEGORY_REPLICA_KILL, $replicaPort)) {
-                    $score -= 3;
+                $repeatPenalty = $this->chaosRepeatPenalty($runtime, ChaosOptions::CATEGORY_REPLICA_KILL, $replicaPort);
+                if ($repeatPenalty > 0) {
+                    $score -= $repeatPenalty;
+                    $reasons[] = 'chaos already killed this replica recently';
                 }
 
                 $candidates[] = new ChaosCandidateEvent(
@@ -2105,50 +2119,18 @@ final class ClusterManager
             return null;
         }
 
-        usort($candidates, static fn (ChaosCandidateEvent $left, ChaosCandidateEvent $right): int => $right->score <=> $left->score);
-        $topScore = $candidates[0]->score;
-        $topCandidates = [$candidates[0]];
-        foreach (array_slice($candidates, 1) as $candidate) {
-            if ($candidate->score >= ($topScore - 1)) {
-                $topCandidates[] = $candidate;
-            }
-        }
-
-        return $this->pickWeightedChaosCandidate($topCandidates, $chaos->categories);
+        return $this->chaosCandidateSelector->select($candidates, $chaos->categories);
     }
 
     /**
-     * Break a score tie with the operator's category weights, so
-     * `--categories all,slot-migration:3` makes an eligible slot migration
-     * three times as likely as an equally scored candidate from a neutral
-     * category. Uniform weights reduce to a plain uniform draw.
-     *
-     * @param non-empty-list<ChaosCandidateEvent> $candidates
+     * Repetition damping. A candidate loses points for every recent event that
+     * already aimed the same category at the same target, so a category cannot
+     * keep re-selecting itself by ping-ponging between two targets. Passing a
+     * null port damps the category as a whole regardless of what it hit.
      */
-    private function pickWeightedChaosCandidate(array $candidates, ChaosCategorySelection $categories): ChaosCandidateEvent
+    private function chaosRepeatPenalty(ChaosRuntimeState $runtime, string $category, ?int $port = null): int
     {
-        $weights = array_map(
-            static fn (ChaosCandidateEvent $candidate): float => $categories->weightFor($candidate->category),
-            $candidates,
-        );
-
-        $total = array_sum($weights);
-        if ($total <= 0.0) {
-            return $candidates[mt_rand(0, count($candidates) - 1)];
-        }
-
-        $threshold = $total * (mt_rand() / mt_getrandmax());
-        $cumulative = 0.0;
-        foreach ($candidates as $index => $candidate) {
-            $cumulative += $weights[$index];
-            if ($threshold < $cumulative) {
-                return $candidate;
-            }
-        }
-
-        // Only reachable when floating point accumulation lands short of the
-        // draw, in which case the last candidate is the right answer.
-        return $candidates[count($candidates) - 1];
+        return self::CHAOS_REPEAT_PENALTY * $runtime->recentEventCount($category, $port);
     }
 
     /**
@@ -2258,11 +2240,12 @@ final class ClusterManager
                 $reasons[] = 'the shard keeps another healthy replica after the promotion';
             }
 
-            if ($runtime->lastEventTargeted(ChaosOptions::CATEGORY_PRIMARY_FAILOVER, $plan->primaryPort)) {
-                // The previous event promoted this primary; hold the new roles
-                // for a while instead of immediately failing back.
-                $score -= 3;
-                $reasons[] = 'the previous event promoted this primary, so failing back is deprioritized';
+            $repeatPenalty = $this->chaosRepeatPenalty($runtime, ChaosOptions::CATEGORY_PRIMARY_FAILOVER, $plan->primaryPort);
+            if ($repeatPenalty > 0) {
+                // Chaos promoted this primary within the recency window; hold
+                // the new roles for a while instead of failing straight back.
+                $score -= $repeatPenalty;
+                $reasons[] = 'chaos promoted this primary recently, so failing back is deprioritized';
             } elseif ($this->wasDemotedByChaosFailover($runtime, $plan->replicaPort)) {
                 $score += 2;
                 $reasons[] = 'restores a primary chaos demoted earlier, exercising role reversal';
@@ -2283,13 +2266,24 @@ final class ClusterManager
         return $candidates;
     }
 
+    /**
+     * True when the last thing chaos did to this port was demote it. Only the
+     * newest failover touching the port counts: asking whether it was ever
+     * demoted makes both directions of a shard permanently attractive, so the
+     * pair keeps trading roles for the rest of the run.
+     */
     private function wasDemotedByChaosFailover(ChaosRuntimeState $runtime, int $port): bool
     {
-        foreach ($runtime->history as $event) {
-            if ($event->category === ChaosOptions::CATEGORY_PRIMARY_FAILOVER
-                && $event->status === 'completed'
-                && $event->targetPrimaryPort === $port
-            ) {
+        foreach (array_reverse($runtime->history) as $event) {
+            if ($event->category !== ChaosOptions::CATEGORY_PRIMARY_FAILOVER || $event->status !== 'completed') {
+                continue;
+            }
+
+            if ($event->targetPort === $port) {
+                return false;
+            }
+
+            if ($event->targetPrimaryPort === $port) {
                 return true;
             }
         }
@@ -2338,11 +2332,12 @@ final class ClusterManager
                 $reasons[] = 'balances replica inventory toward a lower-redundancy primary';
             }
 
-            if ($runtime->lastEventTargeted(ChaosOptions::CATEGORY_REPLICA_REPARENT, $plan->replicaPort)) {
+            $repeatPenalty = $this->chaosRepeatPenalty($runtime, ChaosOptions::CATEGORY_REPLICA_REPARENT, $plan->replicaPort);
+            if ($repeatPenalty > 0) {
                 // Let clients live with the new layout for a while instead of
                 // bouncing the same replica between two shards.
-                $score -= 3;
-                $reasons[] = 'the previous event already moved this replica, so moving it again is deprioritized';
+                $score -= $repeatPenalty;
+                $reasons[] = 'chaos already moved this replica recently, so moving it again is deprioritized';
             } elseif ($this->wasReparentedAwayFrom($runtime, $plan->replicaPort, $plan->targetPrimaryPort)) {
                 $score += 1;
                 $reasons[] = 'restores the replica to the shard it was moved away from earlier';
@@ -2363,17 +2358,21 @@ final class ClusterManager
         return $candidates;
     }
 
+    /**
+     * True when the newest move of this replica took it away from the primary
+     * a candidate would now return it to. Matching any older move as well
+     * would keep every shard the replica has ever lived on permanently
+     * attractive.
+     */
     private function wasReparentedAwayFrom(ChaosRuntimeState $runtime, int $replicaPort, int $primaryPort): bool
     {
-        foreach ($runtime->history as $event) {
+        foreach (array_reverse($runtime->history) as $event) {
             $plan = $event->replicaReparentPlan;
-            if ($event->status === 'completed'
-                && $plan instanceof ReplicaReparentPlan
-                && $plan->replicaPort === $replicaPort
-                && $plan->sourcePrimaryPort === $primaryPort
-            ) {
-                return true;
+            if ($event->status !== 'completed' || !$plan instanceof ReplicaReparentPlan || $plan->replicaPort !== $replicaPort) {
+                continue;
             }
+
+            return $plan->sourcePrimaryPort === $primaryPort;
         }
 
         return false;
@@ -2423,15 +2422,21 @@ final class ClusterManager
             $plan->slotCount(),
         )];
 
-        if ($runtime->mostRecentMatching(ChaosOptions::CATEGORY_PRIMARY_REMOVE) instanceof ChaosEventRecord) {
+        $recentRemove = $runtime->mostRecentMatching(
+            ChaosOptions::CATEGORY_PRIMARY_REMOVE,
+            window: ChaosRuntimeState::RECENCY_WINDOW,
+        );
+        if ($recentRemove instanceof ChaosEventRecord) {
             $score += 2;
             $reasons[] = 'restores primary inventory that chaos removed earlier';
         }
 
-        $lastEvent = $runtime->history[count($runtime->history) - 1] ?? null;
-        if ($lastEvent instanceof ChaosEventRecord && $lastEvent->category === ChaosOptions::CATEGORY_PRIMARY_ADD) {
-            $score -= 3;
-            $reasons[] = 'the previous event already grew the cluster, so growing it again is deprioritized';
+        // Damped on the category rather than the port: every add targets a
+        // fresh port, so a per-port check would never fire.
+        $repeatPenalty = $this->chaosRepeatPenalty($runtime, ChaosOptions::CATEGORY_PRIMARY_ADD);
+        if ($repeatPenalty > 0) {
+            $score -= $repeatPenalty;
+            $reasons[] = 'chaos already grew the cluster recently, so growing it again is deprioritized';
         }
 
         return new ChaosCandidateEvent(
@@ -2485,10 +2490,13 @@ final class ClusterManager
                 $reasons[] = sprintf('draining it moves at most %d slots', $chaos->slotMigrationBatch);
             }
 
-            if ($runtime->lastEventTargeted(ChaosOptions::CATEGORY_PRIMARY_ADD, $plan->port)) {
-                // Let clients discover the new shard before taking it away.
-                $score -= 3;
-                $reasons[] = 'the previous event created this primary, so removing it now is deprioritized';
+            $repeatPenalty = $this->chaosRepeatPenalty($runtime, ChaosOptions::CATEGORY_PRIMARY_REMOVE)
+                + self::CHAOS_REPEAT_PENALTY * $runtime->recentEventCount(ChaosOptions::CATEGORY_PRIMARY_ADD, $plan->port);
+            if ($repeatPenalty > 0) {
+                // Let clients discover the new shard before taking it away, and
+                // do not shrink the cluster twice in quick succession.
+                $score -= $repeatPenalty;
+                $reasons[] = 'chaos recently created this primary or already shrank the cluster, so removing it now is deprioritized';
             }
 
             $candidates[] = new ChaosCandidateEvent(

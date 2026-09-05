@@ -5,6 +5,7 @@ declare(strict_types=1);
 
 use Mgrunder\CreateCluster\BuildInfoRenderer;
 use Mgrunder\CreateCluster\BuildInfoResolver;
+use Mgrunder\CreateCluster\ChaosCandidateSelector;
 use Mgrunder\CreateCluster\ChaosWatchTuiRenderer;
 use Mgrunder\CreateCluster\ClusterManager;
 use Mgrunder\CreateCluster\ClusterShardsParser;
@@ -106,6 +107,7 @@ $manager = new ClusterManager(
     managedClusterSummaryRenderer: new ManagedClusterSummaryRenderer(),
     managedClusterSummaryTuiRenderer: new ManagedClusterSummaryTuiRenderer(),
     clusterTreeSelector: new ClusterTreeSelector(new ClusterTreeViewBuilder()),
+    chaosCandidateSelector: new ChaosCandidateSelector(),
     slotMigrationEligibility: new SlotMigrationEligibility(),
     slotMigrationPlanner: new SlotMigrationPlanner($randomizer),
     primaryFailoverEligibility: new PrimaryFailoverEligibility(),

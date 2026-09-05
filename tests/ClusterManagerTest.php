@@ -467,6 +467,8 @@ MESSAGE);
         // the previous event, so the failback is the least attractive option.
         self::assertSame([7005 => 3, 7006 => 3, 7000 => 0], $scores);
 
+        // One unrelated event is not enough: a two-shard cluster could
+        // otherwise alternate shards and fail back on every other event.
         $runtime->rememberHistory(new ChaosEventRecord(
             id: 2,
             category: ChaosOptions::CATEGORY_SLOT_MIGRATION,
@@ -479,7 +481,35 @@ MESSAGE);
             postcondition: 'moved',
         ));
 
+        self::assertSame([7005 => 3, 7006 => 3, 7000 => 0], $this->invokePrimaryFailoverCandidateScores($view, $runtime));
+
+        // Once the promotion falls out of the window the shard is fair game
+        // again, and restoring the node chaos demoted is the preferred move.
+        $this->ageOutRecencyWindow($runtime);
+
         self::assertSame([7005 => 3, 7006 => 3, 7000 => 5], $this->invokePrimaryFailoverCandidateScores($view, $runtime));
+
+        // Once chaos has promoted 7000 again, it is no longer a node chaos
+        // demoted, so the role-reversal bonus stops applying instead of
+        // marking the pair permanently interesting.
+        $runtime->rememberHistory($this->completedFailoverEvent(promotedPort: 7000, demotedPort: 7003));
+
+        self::assertSame([7005 => 3, 7006 => 3, 7000 => 3], $this->invokePrimaryFailoverCandidateScores($view, $runtime));
+    }
+
+    private function completedFailoverEvent(int $promotedPort, int $demotedPort): ChaosEventRecord
+    {
+        return new ChaosEventRecord(
+            id: 99,
+            category: ChaosOptions::CATEGORY_PRIMARY_FAILOVER,
+            status: 'completed',
+            targetPort: $promotedPort,
+            targetPrimaryPort: $demotedPort,
+            startedAt: 0.0,
+            completedAt: 1.0,
+            summary: sprintf('primary-failover promote=%d demote=%d', $promotedPort, $demotedPort),
+            postcondition: 'promoted',
+        );
     }
 
     public function testPrimaryFailoverCandidatesAreEmptyWhileTheClusterBlocksFailover(): void
@@ -785,17 +815,7 @@ MESSAGE);
     {
         $runtime = $this->chaosRuntime();
         $runtime->rememberHistory($this->completedReparentEvent(replicaPort: 7003, sourcePort: 7001, targetPort: 7000));
-        $runtime->rememberHistory(new ChaosEventRecord(
-            id: 2,
-            category: ChaosOptions::CATEGORY_SLOT_MIGRATION,
-            status: 'completed',
-            targetPort: 7002,
-            targetPrimaryPort: 7001,
-            startedAt: 1.0,
-            completedAt: 2.0,
-            summary: 'slot-migration',
-            postcondition: 'moved',
-        ));
+        $this->ageOutRecencyWindow($runtime);
 
         self::assertSame(
             [[7003, 7001, 3], [7003, 7002, 5], [7004, 7001, 2], [7004, 7002, 5]],
@@ -809,6 +829,27 @@ MESSAGE);
             [],
             $this->invokeReplicaReparentCandidateScores($this->chaosViewForReparent(clusterDown: true), $this->chaosRuntime()),
         );
+    }
+
+    /**
+     * Push enough unrelated events to move everything already in the history
+     * out of the repetition window, so the damping stops applying.
+     */
+    private function ageOutRecencyWindow(ChaosRuntimeState $runtime): void
+    {
+        for ($index = 0; $index < ChaosRuntimeState::RECENCY_WINDOW; $index++) {
+            $runtime->rememberHistory(new ChaosEventRecord(
+                id: count($runtime->history) + 1,
+                category: ChaosOptions::CATEGORY_SLOT_MIGRATION,
+                status: 'completed',
+                targetPort: 7002,
+                targetPrimaryPort: 7001,
+                startedAt: (float) $index,
+                completedAt: $index + 1.0,
+                summary: 'slot-migration',
+                postcondition: 'moved',
+            ));
+        }
     }
 
     private function chaosRuntime(): ChaosRuntimeState
@@ -1202,7 +1243,15 @@ MESSAGE);
             $this->invokePrimaryRemoveCandidateScores($view, $runtime),
         );
 
+        // A single unrelated event does not clear the add; the whole window has
+        // to pass before the node chaos created becomes a preferred target.
         $runtime->rememberHistory($this->membershipEvent(ChaosOptions::CATEGORY_SLOT_MIGRATION, 7001));
+        self::assertSame(
+            [7001 => 2, 7002 => 2, 7010 => 2],
+            $this->invokePrimaryRemoveCandidateScores($view, $runtime),
+        );
+
+        $this->ageOutRecencyWindow($runtime);
         self::assertSame(
             [7001 => 2, 7002 => 2, 7010 => 5],
             $this->invokePrimaryRemoveCandidateScores($view, $runtime),
@@ -1472,88 +1521,5 @@ MESSAGE);
             ]),
             'Chaos categories: replica-kill:0.5,slot-migration:3,replica-add',
         ];
-    }
-
-    #[DataProvider('chaosCategoryWeightDistributions')]
-    public function testWeightedChaosPickFollowsTheCategoryWeights(
-        float $slotMigrationWeight,
-        float $expectedShare,
-    ): void {
-        $draws = 4000;
-        $counts = $this->invokeWeightedChaosPickCounts(
-            new ChaosCategorySelection([
-                ChaosOptions::CATEGORY_REPLICA_KILL => 1.0,
-                ChaosOptions::CATEGORY_SLOT_MIGRATION => $slotMigrationWeight,
-            ]),
-            $draws,
-        );
-
-        $share = $counts[ChaosOptions::CATEGORY_SLOT_MIGRATION] / $draws;
-
-        self::assertSame($draws, array_sum($counts));
-        self::assertEqualsWithDelta($expectedShare, $share, 0.03);
-    }
-
-    /**
-     * @return iterable<string, array{float, float}>
-     */
-    public static function chaosCategoryWeightDistributions(): iterable
-    {
-        yield 'neutral weights split evenly' => [1.0, 0.5];
-        yield 'triple weight wins three of four ties' => [3.0, 0.75];
-        yield 'fractional weight is picked less often' => [0.25, 0.2];
-    }
-
-    public function testWeightedChaosPickTreatsDisabledCategoriesAsNeutral(): void
-    {
-        $draws = 4000;
-        $counts = $this->invokeWeightedChaosPickCounts(
-            ChaosCategorySelection::fromCategories([ChaosOptions::CATEGORY_REPLICA_KILL]),
-            $draws,
-        );
-
-        self::assertEqualsWithDelta(0.5, $counts[ChaosOptions::CATEGORY_SLOT_MIGRATION] / $draws, 0.03);
-    }
-
-    /**
-     * @return array<string, int> pick count keyed by chaos category
-     */
-    private function invokeWeightedChaosPickCounts(ChaosCategorySelection $categories, int $draws): array
-    {
-        $manager = $this->newClusterManagerWithoutConstructor();
-        $method = new ReflectionClass($manager)->getMethod('pickWeightedChaosCandidate');
-        $candidates = [
-            $this->chaosCandidate(ChaosOptions::CATEGORY_REPLICA_KILL),
-            $this->chaosCandidate(ChaosOptions::CATEGORY_SLOT_MIGRATION),
-        ];
-
-        $counts = [
-            ChaosOptions::CATEGORY_REPLICA_KILL => 0,
-            ChaosOptions::CATEGORY_SLOT_MIGRATION => 0,
-        ];
-
-        mt_srand(20250905);
-        for ($draw = 0; $draw < $draws; $draw++) {
-            $picked = $method->invoke($manager, $candidates, $categories);
-            self::assertInstanceOf(ChaosCandidateEvent::class, $picked);
-            $counts[$picked->category]++;
-        }
-
-        mt_srand();
-
-        return $counts;
-    }
-
-    private function chaosCandidate(string $category): ChaosCandidateEvent
-    {
-        return new ChaosCandidateEvent(
-            category: $category,
-            targetPort: 7003,
-            targetPrimaryPort: 7000,
-            score: 3,
-            summary: $category,
-            postcondition: sprintf('%s converged', $category),
-            reasons: ['tied with every other candidate'],
-        );
     }
 }

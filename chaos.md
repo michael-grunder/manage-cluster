@@ -53,15 +53,19 @@ chosen based on:
   enumerated, and it can be combined with individual categories.
 
   Each entry may be written as `<category>:<weight>` to bias selection. The
-  weight is a positive integer or decimal, defaults to `1`, and multiplies the
-  chance that a tied candidate from that category is chosen, so
-  `all,slot-migration:3` allows everything but picks slot migration three times
-  as often, and `replica-kill:0.1` makes replica kills a tenth as likely. A
-  weight given for `all` applies to every category, a later entry reweights an
-  earlier one in place, and a category enabled with `--allow-<category>` keeps
-  the weight `--categories` gave it. Weights only break ties between candidates
-  the planner already considers best; they never override the safety and
-  eligibility rules that decide which events can run at all.
+  weight is a positive integer or decimal, defaults to `1`, and multiplies that
+  category's share of the draw, so `all,slot-migration:3` allows everything but
+  picks slot migration three times as often, and `replica-kill:0.1` makes
+  replica kills a tenth as likely. A weight given for `all` applies to every
+  category, a later entry reweights an earlier one in place, and a category
+  enabled with `--allow-<category>` keeps the weight `--categories` gave it.
+
+  Selection draws from every eligible candidate rather than a shortlist of the
+  best-scoring ones, with each candidate's share proportional to
+  `weight * 2 ** score`. One score point is therefore worth a factor of two,
+  and a category weight can outbid a lower score: `slot-migration:4` buys two
+  score points. Weights never override the safety and eligibility rules that
+  decide which events can run at all.
 
   Initial supported categories:
   - `replica-kill`

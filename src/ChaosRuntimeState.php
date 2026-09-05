@@ -6,6 +6,14 @@ namespace Mgrunder\CreateCluster;
 
 final class ChaosRuntimeState
 {
+    /**
+     * How many recent events repetition damping looks back over. Inspecting
+     * only the previous event is not enough: a two-shard cluster can alternate
+     * between its shards and never trip a one-event check, which is how a
+     * single category ends up owning an entire run.
+     */
+    public const int RECENCY_WINDOW = 6;
+
     public int $eventCounter = 0;
     public int $consecutiveFailures = 0;
     public ?ChaosEventRecord $inflightEvent = null;
@@ -64,10 +72,16 @@ final class ChaosRuntimeState
         $this->history[] = $event;
     }
 
-    public function mostRecentMatching(string $category, ?int $targetPort = null): ?ChaosEventRecord
+    /**
+     * The newest event matching a category, optionally narrowed to one target
+     * port and to the recency window instead of the whole run.
+     */
+    public function mostRecentMatching(string $category, ?int $targetPort = null, ?int $window = null): ?ChaosEventRecord
     {
-        for ($index = count($this->history) - 1; $index >= 0; $index--) {
-            $event = $this->history[$index];
+        $history = $window === null ? $this->history : $this->recentHistory($window);
+
+        for ($index = count($history) - 1; $index >= 0; $index--) {
+            $event = $history[$index];
             if ($event->category !== $category) {
                 continue;
             }
@@ -80,6 +94,42 @@ final class ChaosRuntimeState
         }
 
         return null;
+    }
+
+    /**
+     * The tail of the run that repetition damping looks at, oldest first.
+     *
+     * @return list<ChaosEventRecord>
+     */
+    public function recentHistory(int $window = self::RECENCY_WINDOW): array
+    {
+        if ($window < 1) {
+            return [];
+        }
+
+        return array_slice($this->history, -$window);
+    }
+
+    /**
+     * How many of the recent events belong to a category, optionally narrowed
+     * to the ones that aimed at a single port.
+     */
+    public function recentEventCount(string $category, ?int $targetPort = null, int $window = self::RECENCY_WINDOW): int
+    {
+        $count = 0;
+        foreach ($this->recentHistory($window) as $event) {
+            if ($event->category !== $category) {
+                continue;
+            }
+
+            if ($targetPort !== null && $event->targetPort !== $targetPort) {
+                continue;
+            }
+
+            $count++;
+        }
+
+        return $count;
     }
 
     /**
@@ -99,15 +149,6 @@ final class ChaosRuntimeState
         }
 
         return array_map('intval', array_keys($down));
-    }
-
-    public function lastEventTargeted(string $category, int $port): bool
-    {
-        $lastEvent = $this->history[count($this->history) - 1] ?? null;
-
-        return $lastEvent instanceof ChaosEventRecord
-            && $lastEvent->category === $category
-            && $lastEvent->targetPort === $port;
     }
 
     public function completedEventCount(): int

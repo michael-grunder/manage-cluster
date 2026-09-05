@@ -362,13 +362,20 @@ Useful options:
   `replica-add`, and every other category is opt-in
 - Every `--categories` entry may carry a `:WEIGHT` suffix that biases how often
   chaos picks that category. The weight defaults to `1` and accepts integers or
-  decimals, so `slot-migration:3` is three times as likely to win a tie,
-  `replica-kill:0.5` is half as likely, and `all,slot-migration:3` keeps every
-  category while favoring slot migration. `all:2` weights every category at
-  once, and a later entry reweights an earlier one without duplicating or
-  reordering it. Weights bias the choice among the candidates chaos already
-  considers best for the current topology; they never make it pick an event
-  that is unsafe or ineligible right now
+  decimals, so `slot-migration:3` is three times as likely as an equally
+  attractive candidate from another category, `replica-kill:0.5` is half as
+  likely, and `all,slot-migration:3` keeps every category while favoring slot
+  migration. `all:2` weights every category at once, and a later entry
+  reweights an earlier one without duplicating or reordering it
+- Chaos draws its next event from every eligible candidate, not just the ones
+  that scored best for the current topology. Each candidate is scored on how
+  useful it is right now, and each score point doubles its share of the draw,
+  so a category weight can outbid a score: a weight of `4` is worth two score
+  points and a weight of `8` is worth three. Weights never make chaos pick an
+  event that is unsafe or ineligible right now
+- A candidate is damped when recent events already aimed the same category at
+  the same target, which keeps one shard from monopolising a run by trading
+  roles back and forth
 - `--interval SECONDS` sets the minimum time between completed steps
 - `--max-events N` stops after N completed events
 - `--max-failures N` aborts after N consecutive execution or convergence
