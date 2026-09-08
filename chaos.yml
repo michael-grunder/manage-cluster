@@ -5,9 +5,9 @@ categories:
   replica-remove: 1
   replica-kill: 1
   replica-restart: 1
-  slot-migration: 1
+  slot-migration: 40
   replica-reparent: 1
-  primary-failover: 1
+  #primary-failover: 1
 
 #primary-failover
 #replica-reparent
@@ -22,6 +22,6 @@ wait-timeout: 60
 
 cooldown: 2
 slot-strategy: balanced
-slot-batch: 128
+slot-batch: 512
 
 unsafe: false
