@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 ### Added
+- `primary-failover --auto` opts into choosing the lowest-port eligible primary
+  and replica from the current topology without a picker or TTY, retaining the
+  existing safety checks and convergence wait.
 - `primary-failover SEED_PORT` performs one coordinated primary failover, using
   an interactive primary picker or `--primary`/`--replica` targets. It reuses the
   chaos safety checks, waits for the role swap, reports elapsed time, and accepts

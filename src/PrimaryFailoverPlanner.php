@@ -82,10 +82,6 @@ final readonly class PrimaryFailoverPlanner
 
     public function select(ChaosClusterView $view, ?int $primaryPort, ?int $replicaPort): PrimaryFailoverPlan
     {
-        if ($primaryPort === null && $replicaPort === null) {
-            throw new InvalidArgumentException('Select a primary or replica for primary-failover.');
-        }
-
         foreach ($this->candidates($view) as $plan) {
             if (($primaryPort === null || $plan->primaryPort === $primaryPort)
                 && ($replicaPort === null || $plan->replicaPort === $replicaPort)) {

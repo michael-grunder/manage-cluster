@@ -105,7 +105,8 @@ final class CommandLineParser
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'primary-failover' => [
-            ['--primary PORT', 'Primary to demote; otherwise choose it interactively'],
+            ['--auto', 'Choose the lowest-port eligible primary and replica without a picker'],
+            ['--primary PORT', 'Primary to demote; otherwise use --auto or choose it interactively'],
             ['--replica PORT', 'Replica to promote; otherwise use the lowest-port eligible replica'],
             ['--wait-timeout SECONDS', 'Maximum wait for failover convergence (default: 60)'],
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
@@ -199,6 +200,7 @@ final class CommandLineParser
         ],
         'primary-failover' => [
             'primary-failover 7000',
+            'primary-failover 7000 --auto',
             'primary-failover 7000 --primary 7000',
             'primary-failover 7000 --primary 7000 --replica 7003 --wait-timeout 120',
         ],
@@ -255,7 +257,8 @@ final class CommandLineParser
         'primary-failover' => [
             'Requires managed cluster metadata and a healthy, caught-up replica of a reachable slot-owning primary.',
             'Uses coordinated CLUSTER FAILOVER and always waits for the replica to own the slots and the former primary to follow it.',
-            'Without --primary or --replica, an interactive primary picker is opened.',
+            'Without --auto, --primary, or --replica, an interactive primary picker is opened.',
+            '--auto selects both targets from the current topology and cannot be combined with --primary or --replica.',
         ],
         'chaos' => [
             'chaos executes replica kill, restart, add, and reparent, primary add and remove, bounded slot migration, and coordinated primary failover.',
@@ -304,6 +307,7 @@ final class CommandLineParser
         $replicaPort = null;
         $replicaPortOption = null;
         $primaryPort = null;
+        $auto = false;
         $generatedScriptPath = null;
         $restartConfigOverrides = [];
         $restartConfigOverrideProvided = false;
@@ -445,6 +449,10 @@ final class CommandLineParser
 
                 case '--all':
                     $all = true;
+                    break;
+
+                case '--auto':
+                    $auto = true;
                     break;
 
                 case '--wait':
@@ -784,6 +792,14 @@ final class CommandLineParser
             throw new InvalidArgumentException('--primary can only be used with kill, restart-replica, or primary-failover.');
         }
 
+        if ($auto && $action !== 'primary-failover') {
+            throw new InvalidArgumentException('--auto can only be used with primary-failover.');
+        }
+
+        if ($auto && ($primaryPort !== null || $replicaPort !== null)) {
+            throw new InvalidArgumentException('--auto cannot be combined with --primary or --replica.');
+        }
+
         if ($all && $replicaPortOption === '--replica') {
             throw new InvalidArgumentException('--all and --replica cannot be used together.');
         }
@@ -991,6 +1007,7 @@ final class CommandLineParser
             killMethod: $killMethod,
             completionShell: $completionShell,
             waitTimeoutSeconds: $waitTimeout,
+            auto: $auto,
         );
     }
 
@@ -1484,7 +1501,7 @@ final class CommandLineParser
             'flush' => 'flush PORT [PORT ...]',
             'fill' => 'fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]',
             'add-replica' => 'add-replica SEED_PORT [--port PORT]',
-            'primary-failover' => 'primary-failover SEED_PORT [--primary PORT] [--replica PORT] [--wait-timeout SECONDS]',
+            'primary-failover' => 'primary-failover SEED_PORT [--auto | --primary PORT [--replica PORT] | --replica PORT] [--wait-timeout SECONDS]',
             'restart-replica' => 'restart-replica SEED_PORT [--replica PORT] [--primary PORT] [--all] [--wait] [--config NAME=VALUE]',
             'chaos' => 'chaos SEED_PORT [--categories LIST] [--interval SECONDS] [--max-events N] [--dry-run] [--watch]',
             'completions' => 'completions bash|zsh',

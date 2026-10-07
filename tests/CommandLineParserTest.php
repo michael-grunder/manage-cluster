@@ -40,7 +40,7 @@ final class CommandLineParserTest extends TestCase
      * @param list<string> $args
      */
     #[DataProvider('primaryFailoverOptionsProvider')]
-    public function testPrimaryFailoverOptions(array $args, ?int $primary, ?int $replica, int $timeout): void
+    public function testPrimaryFailoverOptions(array $args, ?int $primary, ?int $replica, int $timeout, bool $auto): void
     {
         $options = (new CommandLineParser())->parse(['bin/manage-cluster', ...$args]);
 
@@ -49,17 +49,21 @@ final class CommandLineParserTest extends TestCase
         self::assertSame($primary, $options->primaryPort);
         self::assertSame($replica, $options->replicaPort);
         self::assertSame($timeout, $options->waitTimeoutSeconds);
+        self::assertSame($auto, $options->auto);
         self::assertNull($options->chaos);
     }
 
-    /** @return iterable<string, array{list<string>, ?int, ?int, int}> */
+    /** @return iterable<string, array{list<string>, ?int, ?int, int, bool}> */
     public static function primaryFailoverOptionsProvider(): iterable
     {
-        yield 'interactive' => [['primary-failover', '7000'], null, null, 60];
-        yield 'primary' => [['primary-failover', '7000', '--primary', '7000'], 7000, null, 60];
-        yield 'replica' => [['primary-failover', '7000', '--replica', '7003'], null, 7003, 60];
-        yield 'explicit pair and timeout' => [['primary-failover', '7000', '--primary', '7000', '--replica', '7003', '--wait-timeout', '120'], 7000, 7003, 120];
-        yield 'flag alias' => [['--primary-failover', '7000'], null, null, 60];
+        yield 'interactive' => [['primary-failover', '7000'], null, null, 60, false];
+        yield 'automatic' => [['primary-failover', '7000', '--auto'], null, null, 60, true];
+        yield 'automatic with timeout' => [['primary-failover', '7000', '--auto', '--wait-timeout', '120'], null, null, 120, true];
+        yield 'automatic before action' => [['--auto', 'primary-failover', '7000'], null, null, 60, true];
+        yield 'primary' => [['primary-failover', '7000', '--primary', '7000'], 7000, null, 60, false];
+        yield 'replica' => [['primary-failover', '7000', '--replica', '7003'], null, 7003, 60, false];
+        yield 'explicit pair and timeout' => [['primary-failover', '7000', '--primary', '7000', '--replica', '7003', '--wait-timeout', '120'], 7000, 7003, 120, false];
+        yield 'flag alias' => [['--primary-failover', '7000'], null, null, 60, false];
     }
 
     /** @param list<string> $args */
@@ -81,12 +85,23 @@ final class CommandLineParserTest extends TestCase
         yield 'zero timeout' => [['7000', '--wait-timeout', '0'], '--wait-timeout must be > 0.'];
         yield 'negative timeout' => [['7000', '--wait-timeout', '-1'], '--wait-timeout expects a value.'];
         yield 'all disallowed' => [['7000', '--all'], '--all can only be used with kill or restart-replica.'];
+        yield 'automatic with primary' => [['7000', '--auto', '--primary', '7000'], '--auto cannot be combined with --primary or --replica.'];
+        yield 'automatic with replica' => [['7000', '--replica', '7003', '--auto'], '--auto cannot be combined with --primary or --replica.'];
+        yield 'automatic without seed' => [['--auto'], 'No ports provided'];
+    }
+
+    public function testAutoIsRejectedForOtherActions(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('--auto can only be used with primary-failover.');
+        (new CommandLineParser())->parse(['bin/manage-cluster', 'chaos', '7000', '--auto']);
     }
 
     public function testPrimaryFailoverHelp(): void
     {
         $help = (new CommandLineParser())->contextualUsage('primary-failover');
         self::assertStringContainsString('primary-failover SEED_PORT', $help);
+        self::assertStringContainsString('--auto', $help);
         self::assertStringContainsString('--primary PORT', $help);
         self::assertStringContainsString('--replica PORT', $help);
         self::assertStringContainsString('--wait-timeout SECONDS', $help);

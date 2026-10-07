@@ -42,8 +42,8 @@ cluster management.
 - `redis-cli`
 - `openssl` when using `--tls`
 - An interactive TTY for `add-replica`, for `kill`/`restart-replica` when
-  `--replica` is omitted, for `primary-failover` when neither `--primary` nor
-  `--replica` is given, and for the TUI `status` view
+  `--replica` is omitted, for `primary-failover` when none of `--auto`, `--primary`,
+  or `--replica` is given, and for the TUI `status` view
 
 ## Installation
 
@@ -339,15 +339,22 @@ former primary to follow it.
 
 ```bash
 bin/manage-cluster primary-failover 7000
+bin/manage-cluster primary-failover 7000 --auto
 bin/manage-cluster primary-failover 7000 --primary 7000
 bin/manage-cluster primary-failover 7000 --replica 7003
 bin/manage-cluster primary-failover 7000 --primary 7000 --replica 7003 --wait-timeout 120
 ```
 
-The positional port is a cluster seed. Without either target option, an
+The positional port is a cluster seed. Without `--auto` or either target option, an
 interactive picker selects the primary to demote. `--primary` alone chooses
 its lowest-port eligible replica; `--replica` selects the promotion target
 explicitly. When both are supplied, the replica must belong to that primary.
+
+Use `--auto` to let the utility choose both targets from the current topology
+without a TTY or prompts. It chooses the lowest-port primary with an eligible
+replica, then that primary's lowest-port eligible replica, and prints the chosen
+pair before requesting failover. It fails if no eligible pair exists. `--auto`
+cannot be combined with `--primary` or `--replica`.
 
 Requires managed cluster metadata (`--state-dir` is supported), a reachable
 slot-owning primary, and an attached healthy replica with known replication lag

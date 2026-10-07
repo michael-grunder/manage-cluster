@@ -761,9 +761,9 @@ final class ClusterManager
 
         [$tls, $caCert, , $rawShards] = $this->resolveSeedConnectionContext($seedPort, $metadata);
         $primaryPort = $options->primaryPort;
-        if ($primaryPort === null && $options->replicaPort === null) {
+        if (!$options->auto && $primaryPort === null && $options->replicaPort === null) {
             if (!$this->clusterTreeSelector->supportsInteractiveSelection()) {
-                throw new RuntimeException('primary-failover needs an interactive TTY, or --primary PORT or --replica PORT for noninteractive use.');
+                throw new RuntimeException('primary-failover needs an interactive TTY, or --auto, --primary PORT, or --replica PORT for noninteractive use.');
             }
 
             $selected = $this->clusterTreeSelector->select(

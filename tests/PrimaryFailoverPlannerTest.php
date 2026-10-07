@@ -36,6 +36,7 @@ final class PrimaryFailoverPlannerTest extends TestCase
     public static function selectedTargetProvider(): iterable
     {
         yield 'lowest eligible replica' => [7000, null, 7003];
+        yield 'automatic pair' => [null, null, 7003];
         yield 'other shard' => [7001, null, 7005];
         yield 'explicit replica' => [null, 7004, 7004];
         yield 'explicit pair' => [7000, 7004, 7004];
@@ -63,10 +64,36 @@ final class PrimaryFailoverPlannerTest extends TestCase
         yield 'unknown primary' => [7999, null];
     }
 
-    public function testSelectRequiresATarget(): void
+    public function testAutomaticSelectionSkipsIneligibleShardsAndReplicas(): void
     {
-        $this->expectException(InvalidArgumentException::class);
+        $view = $this->view([
+            7002 => ['slots' => new SlotRange(10923, 16383), 'replicas' => [7007 => []]],
+            7001 => ['slots' => new SlotRange(5462, 10922), 'replicas' => [7006 => [], 7005 => [], 7004 => ['offset' => null]]],
+            7000 => ['slots' => new SlotRange(0, 5461), 'replicas' => [7003 => ['syncing' => true]]],
+        ]);
+
+        $plan = (new PrimaryFailoverPlanner())->select($view, null, null);
+
+        self::assertSame(7001, $plan->primaryPort);
+        self::assertSame(7005, $plan->replicaPort);
+    }
+
+    public function testAutomaticSelectionRejectsAnEmptyTopology(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('No eligible failover for primary any, replica any');
         (new PrimaryFailoverPlanner())->select($this->view([]), null, null);
+    }
+
+    public function testAutomaticSelectionRejectsTopologyWithoutEligibleReplicas(): void
+    {
+        $view = $this->view([
+            7000 => ['slots' => new SlotRange(0, 16383), 'replicas' => [7003 => ['offset' => null]]],
+        ]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('No eligible failover for primary any, replica any');
+        (new PrimaryFailoverPlanner())->select($view, null, null);
     }
 
     public function testPlansOneCandidatePerCaughtUpReplicaOrderedByPort(): void
