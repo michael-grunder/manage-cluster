@@ -37,6 +37,7 @@ final readonly class CommandLineOptions
         public bool $wait = false,
         public KillMethod $killMethod = KillMethod::Shutdown,
         public ?string $completionShell = null,
+        public int $waitTimeoutSeconds = 60,
     ) {
     }
 }

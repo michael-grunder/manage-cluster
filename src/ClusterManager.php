@@ -751,6 +751,75 @@ final class ClusterManager
         $this->output->success(sprintf('Replica %d attached to primary %d', $replicaPort, $primaryPort));
     }
 
+    public function primaryFailover(CommandLineOptions $options): void
+    {
+        $seedPort = $options->ports[0];
+        $metadata = $this->stateStore->findClusterByPort($seedPort);
+        if (!is_array($metadata)) {
+            throw new RuntimeException(sprintf('primary-failover requires managed cluster metadata for seed port %d.', $seedPort));
+        }
+
+        [$tls, $caCert, , $rawShards] = $this->resolveSeedConnectionContext($seedPort, $metadata);
+        $primaryPort = $options->primaryPort;
+        if ($primaryPort === null && $options->replicaPort === null) {
+            if (!$this->clusterTreeSelector->supportsInteractiveSelection()) {
+                throw new RuntimeException('primary-failover needs an interactive TTY, or --primary PORT or --replica PORT for noninteractive use.');
+            }
+
+            $selected = $this->clusterTreeSelector->select(
+                shards: $this->clusterShardsParser->parse($rawShards),
+                seedPort: $seedPort,
+                mode: ClusterTreeViewMode::PrimariesOnly,
+                title: 'Select a primary to fail over',
+            );
+            if ($selected === null) {
+                throw new RuntimeException('Primary failover cancelled.');
+            }
+            $primaryPort = $selected->port;
+        }
+
+        $runtime = new ChaosRuntimeState(
+            clusterId: is_string($metadata['id'] ?? null) ? $metadata['id'] : sprintf('seed-%d', $seedPort),
+            seedPort: $seedPort,
+            startedAt: microtime(true),
+            allowedCategories: [ChaosOptions::CATEGORY_PRIMARY_FAILOVER],
+        );
+        // Refresh after the picker: roles and replication health may have changed.
+        $view = $this->discoverChaosClusterView($runtime, $metadata, $seedPort, $tls, $caCert);
+        $blockers = $this->primaryFailoverEligibility->blockers($view, unsafe: false);
+        if ($blockers !== []) {
+            throw new RuntimeException('Cannot fail over primary: ' . implode('; ', $blockers) . '.');
+        }
+
+        $plan = $this->primaryFailoverPlanner->select($view, $primaryPort, $options->replicaPort);
+        $this->output->info($plan->summary());
+        $startedAt = microtime(true);
+        $this->redisNodeClient->clusterFailover($plan->replicaPort, $tls, $caCert);
+        $this->output->info('Failover requested; waiting for slot ownership and replication to settle...');
+        $deadline = $startedAt + $options->waitTimeoutSeconds;
+        $stablePolls = 0;
+        while (microtime(true) < $deadline) {
+            $view = $this->discoverChaosClusterView($runtime, $metadata, $seedPort, $tls, $caCert);
+            $stablePolls = $this->isPrimaryFailoverSatisfied($plan, $view) ? $stablePolls + 1 : 0;
+            if ($stablePolls >= self::CHAOS_STABLE_POLLS) {
+                $this->output->success(sprintf(
+                    'Primary failover completed in %.2fs: %d is primary, %d is its replica.',
+                    microtime(true) - $startedAt,
+                    $plan->replicaPort,
+                    $plan->primaryPort,
+                ));
+                return;
+            }
+            usleep(self::REPLICA_STATE_WAIT_POLL_MICROSECONDS);
+        }
+
+        throw new RuntimeException(sprintf(
+            'Timed out waiting for %s (%s). The failover request may still complete; check cluster status before retrying.',
+            $plan->summary(),
+            $plan->postcondition(),
+        ));
+    }
+
     public function restartReplica(CommandLineOptions $options): void
     {
         $seedPort = $options->ports[0];
@@ -2948,7 +3017,7 @@ final class ClusterManager
             ChaosOptions::CATEGORY_REPLICA_RESTART => $this->isReplicaRestartSatisfied($event, $view),
             ChaosOptions::CATEGORY_REPLICA_ADD => $this->isReplicaAddSatisfied($event, $view),
             ChaosOptions::CATEGORY_SLOT_MIGRATION => $this->isSlotMigrationSatisfied($event, $view),
-            ChaosOptions::CATEGORY_PRIMARY_FAILOVER => $this->isPrimaryFailoverSatisfied($event, $view),
+            ChaosOptions::CATEGORY_PRIMARY_FAILOVER => $this->isPrimaryFailoverSatisfied($event->primaryFailoverPlan, $view),
             ChaosOptions::CATEGORY_REPLICA_REPARENT => $this->isReplicaReparentSatisfied($event, $view),
             ChaosOptions::CATEGORY_PRIMARY_ADD => $this->isPrimaryAddSatisfied($event, $view),
             ChaosOptions::CATEGORY_PRIMARY_REMOVE => $this->isPrimaryRemoveSatisfied($event, $view),
@@ -2987,9 +3056,8 @@ final class ClusterManager
      * landed: the promoted node serves every slot the old primary owned, and
      * the old primary is back as a replica of the node that replaced it.
      */
-    private function isPrimaryFailoverSatisfied(ChaosEventRecord $event, ChaosClusterView $view): bool
+    private function isPrimaryFailoverSatisfied(?PrimaryFailoverPlan $plan, ChaosClusterView $view): bool
     {
-        $plan = $event->primaryFailoverPlan;
         if (!$plan instanceof PrimaryFailoverPlan || $view->clusterDown) {
             return false;
         }
@@ -4812,6 +4880,7 @@ final class ClusterManager
             wait: $options->wait,
             killMethod: $options->killMethod,
             completionShell: $options->completionShell,
+            waitTimeoutSeconds: $options->waitTimeoutSeconds,
         );
     }
 

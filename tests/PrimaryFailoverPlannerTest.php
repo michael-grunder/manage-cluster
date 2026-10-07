@@ -13,6 +13,7 @@ use Mgrunder\CreateCluster\PrimaryFailoverPlanner;
 use Mgrunder\CreateCluster\SlotRange;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
 /**
  * @phpstan-type NodeOverrides array{reachable?: bool, failed?: bool, syncing?: bool, loading?: bool, handshake?: bool, linkStatus?: string, managed?: bool, failoverInProgress?: bool, offset?: int|null, primaryPort?: int}
@@ -20,6 +21,54 @@ use PHPUnit\Framework\TestCase;
  */
 final class PrimaryFailoverPlannerTest extends TestCase
 {
+    #[DataProvider('selectedTargetProvider')]
+    public function testSelectHonorsTargets(?int $primary, ?int $replica, int $expected): void
+    {
+        $view = $this->view([
+            7000 => ['slots' => new SlotRange(0, 5461), 'replicas' => [7004 => [], 7003 => []]],
+            7001 => ['slots' => new SlotRange(5462, 16383), 'replicas' => [7005 => []]],
+        ]);
+        $plan = (new PrimaryFailoverPlanner())->select($view, $primary, $replica);
+        self::assertSame($expected, $plan->replicaPort);
+    }
+
+    /** @return iterable<string, array{?int, ?int, int}> */
+    public static function selectedTargetProvider(): iterable
+    {
+        yield 'lowest eligible replica' => [7000, null, 7003];
+        yield 'other shard' => [7001, null, 7005];
+        yield 'explicit replica' => [null, 7004, 7004];
+        yield 'explicit pair' => [7000, 7004, 7004];
+    }
+
+    #[DataProvider('ineligibleTargetProvider')]
+    public function testSelectRejectsIneligibleTargets(?int $primary, ?int $replica): void
+    {
+        $view = $this->view([
+            7000 => ['slots' => new SlotRange(0, 5461), 'replicas' => [7003 => ['syncing' => true]]],
+            7001 => ['slots' => new SlotRange(5462, 16383), 'replicas' => [7004 => []]],
+        ]);
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('No eligible failover');
+        (new PrimaryFailoverPlanner())->select($view, $primary, $replica);
+    }
+
+    /** @return iterable<string, array{?int, ?int}> */
+    public static function ineligibleTargetProvider(): iterable
+    {
+        yield 'syncing replica' => [null, 7003];
+        yield 'no eligible replicas under primary' => [7000, null];
+        yield 'wrong primary' => [7000, 7004];
+        yield 'primary passed as replica' => [null, 7001];
+        yield 'unknown primary' => [7999, null];
+    }
+
+    public function testSelectRequiresATarget(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        (new PrimaryFailoverPlanner())->select($this->view([]), null, null);
+    }
+
     public function testPlansOneCandidatePerCaughtUpReplicaOrderedByPort(): void
     {
         $view = $this->view([

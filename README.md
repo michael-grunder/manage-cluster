@@ -42,7 +42,8 @@ cluster management.
 - `redis-cli`
 - `openssl` when using `--tls`
 - An interactive TTY for `add-replica`, for `kill`/`restart-replica` when
-  `--replica` is omitted, and for the TUI `status` view
+  `--replica` is omitted, for `primary-failover` when neither `--primary` nor
+  `--replica` is given, and for the TUI `status` view
 
 ## Installation
 
@@ -330,6 +331,35 @@ Behavior notes:
   primary
 - `kill` attempts `CONFIG REWRITE` before shutdown so runtime config changes are
   preserved when Redis can rewrite the managed node config
+
+### `primary-failover`
+
+Promotes one replica using coordinated `CLUSTER FAILOVER` and waits for the
+former primary to follow it.
+
+```bash
+bin/manage-cluster primary-failover 7000
+bin/manage-cluster primary-failover 7000 --primary 7000
+bin/manage-cluster primary-failover 7000 --replica 7003
+bin/manage-cluster primary-failover 7000 --primary 7000 --replica 7003 --wait-timeout 120
+```
+
+The positional port is a cluster seed. Without either target option, an
+interactive picker selects the primary to demote. `--primary` alone chooses
+its lowest-port eligible replica; `--replica` selects the promotion target
+explicitly. When both are supplied, the replica must belong to that primary.
+
+Requires managed cluster metadata (`--state-dir` is supported), a reachable
+slot-owning primary, and an attached healthy replica with known replication lag
+of at most 1 MiB. The existing chaos failover safety checks apply, including a
+healthy cluster state, settled membership, and a voting majority among at least
+three slot-owning primaries. TLS settings come from saved cluster metadata.
+
+The command always waits until the promoted replica owns the shard's slots and
+the former primary follows it without synchronizing, then prints elapsed time.
+`--wait-timeout` defaults to 60 seconds. A timeout exits with an error but does
+not cancel Redis's accepted request; check `status` before retrying. No `FORCE`
+or `TAKEOVER` mode is used.
 
 ### `chaos`
 

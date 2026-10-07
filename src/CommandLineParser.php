@@ -11,7 +11,7 @@ final class CommandLineParser
     /**
      * @var list<string>
      */
-    private const array ACTIONS = ['start', 'stop', 'kill', 'rebalance', 'status', 'list', 'flush', 'fill', 'add-replica', 'restart-replica', 'chaos', 'completions', 'version'];
+    private const array ACTIONS = ['start', 'stop', 'kill', 'rebalance', 'status', 'list', 'flush', 'fill', 'add-replica', 'restart-replica', 'primary-failover', 'chaos', 'completions', 'version'];
 
     /**
      * @var array<string, string>
@@ -27,6 +27,7 @@ final class CommandLineParser
         'fill' => 'Fill a cluster until its primaries reach a target size',
         'add-replica' => 'Add a new replica to a selected primary',
         'restart-replica' => 'Restart one or more failed replicas from cluster metadata',
+        'primary-failover' => 'Promote a replica and wait for its primary to follow it',
         'chaos' => 'Run serialized replica and slot churn against a cluster for client testing',
         'completions' => 'Generate a shell completion script',
         'version' => 'Show the version, build date, and commit this build came from',
@@ -101,6 +102,12 @@ final class CommandLineParser
             ['--all', 'Restart every failed replica, or every failed replica under --primary PORT'],
             ['--wait', 'Wait until Redis cluster state reports restarted replica targets as healthy'],
             ['--config NAME=VALUE', 'Apply and persist a Redis CONFIG SET override after restart; repeatable'],
+            ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
+        ],
+        'primary-failover' => [
+            ['--primary PORT', 'Primary to demote; otherwise choose it interactively'],
+            ['--replica PORT', 'Replica to promote; otherwise use the lowest-port eligible replica'],
+            ['--wait-timeout SECONDS', 'Maximum wait for failover convergence (default: 60)'],
             ['--state-dir PATH', 'Cluster metadata root (default: /tmp/manage-cluster)'],
         ],
         'chaos' => [
@@ -190,6 +197,11 @@ final class CommandLineParser
             'restart-replica 7000 --primary 7000 --all --wait',
             'restart-replica 7000 --replica 7002 --config replica-serve-stale-data=no',
         ],
+        'primary-failover' => [
+            'primary-failover 7000',
+            'primary-failover 7000 --primary 7000',
+            'primary-failover 7000 --primary 7000 --replica 7003 --wait-timeout 120',
+        ],
         'chaos' => [
             'chaos 7000',
             'chaos 7000 --categories replica-kill,replica-restart',
@@ -239,6 +251,11 @@ final class CommandLineParser
         'restart-replica' => [
             'The CLI only restarts failed replicas that can be recovered from saved metadata.',
             '--all is scoped to failed replicas only; healthy replicas are left running.',
+        ],
+        'primary-failover' => [
+            'Requires managed cluster metadata and a healthy, caught-up replica of a reachable slot-owning primary.',
+            'Uses coordinated CLUSTER FAILOVER and always waits for the replica to own the slots and the former primary to follow it.',
+            'Without --primary or --replica, an interactive primary picker is opened.',
         ],
         'chaos' => [
             'chaos executes replica kill, restart, add, and reparent, primary add and remove, bounded slot migration, and coordinated primary failover.',
@@ -321,7 +338,7 @@ final class CommandLineParser
         $chaosAbortOnFailure = $chaosConfig->abortOnFailure ?? false;
         $chaosDryRun = $chaosConfig->dryRun ?? false;
         $chaosSeed = $chaosConfig->seed;
-        $chaosWaitTimeout = $chaosConfig->waitTimeoutSeconds ?? 60;
+        $waitTimeout = $chaosConfig->waitTimeoutSeconds ?? 60;
         $chaosCooldown = $chaosConfig->cooldownSeconds ?? 2;
         $chaosAllowSlotMigration = false;
         $chaosAllowPrimaryFailover = false;
@@ -371,6 +388,7 @@ final class CommandLineParser
                 case '--fill':
                 case '--add-replica':
                 case '--restart-replica':
+                case '--primary-failover':
                 case '--chaos':
                 case '--completions':
                     if ($action !== null) {
@@ -474,7 +492,7 @@ final class CommandLineParser
                     break;
 
                 case '--wait-timeout':
-                    $chaosWaitTimeout = $this->parseIntOption($argv, ++$i, '--wait-timeout');
+                    $waitTimeout = $this->parseIntOption($argv, ++$i, '--wait-timeout');
                     break;
 
                 case '--cooldown':
@@ -714,8 +732,8 @@ final class CommandLineParser
             throw new InvalidArgumentException('--seed can only be used with chaos.');
         }
 
-        if ($action !== 'chaos' && $chaosWaitTimeout !== 60) {
-            throw new InvalidArgumentException('--wait-timeout can only be used with chaos.');
+        if (!in_array($action, ['chaos', 'primary-failover'], true) && $waitTimeout !== 60) {
+            throw new InvalidArgumentException('--wait-timeout can only be used with chaos or primary-failover.');
         }
 
         if ($action !== 'chaos' && $chaosCooldown !== 2) {
@@ -758,19 +776,19 @@ final class CommandLineParser
             throw new InvalidArgumentException('--port can only be used with add-replica.');
         }
 
-        if ($replicaPortOption === '--replica' && !in_array($action, ['kill', 'restart-replica'], true)) {
-            throw new InvalidArgumentException('--replica can only be used with kill or restart-replica.');
+        if ($replicaPortOption === '--replica' && !in_array($action, ['kill', 'restart-replica', 'primary-failover'], true)) {
+            throw new InvalidArgumentException('--replica can only be used with kill, restart-replica, or primary-failover.');
         }
 
-        if ($primaryPort !== null && !in_array($action, ['kill', 'restart-replica'], true)) {
-            throw new InvalidArgumentException('--primary can only be used with kill or restart-replica.');
+        if ($primaryPort !== null && !in_array($action, ['kill', 'restart-replica', 'primary-failover'], true)) {
+            throw new InvalidArgumentException('--primary can only be used with kill, restart-replica, or primary-failover.');
         }
 
         if ($all && $replicaPortOption === '--replica') {
             throw new InvalidArgumentException('--all and --replica cannot be used together.');
         }
 
-        if ($primaryPort !== null && $replicaPortOption !== '--replica' && !$all) {
+        if ($action !== 'primary-failover' && $primaryPort !== null && $replicaPortOption !== '--replica' && !$all) {
             throw new InvalidArgumentException('--primary requires --replica or --all.');
         }
 
@@ -843,6 +861,10 @@ final class CommandLineParser
             throw new InvalidArgumentException('restart-replica expects exactly one seed port.');
         }
 
+        if ($action === 'primary-failover' && count($ports) !== 1) {
+            throw new InvalidArgumentException('primary-failover expects exactly one seed port.');
+        }
+
         if ($action === 'chaos' && count($ports) !== 1) {
             throw new InvalidArgumentException('chaos expects exactly one seed port.');
         }
@@ -887,7 +909,7 @@ final class CommandLineParser
             throw new InvalidArgumentException('--max-failures must be >= 0.');
         }
 
-        if ($chaosWaitTimeout <= 0) {
+        if ($waitTimeout <= 0) {
             throw new InvalidArgumentException('--wait-timeout must be > 0.');
         }
 
@@ -930,7 +952,7 @@ final class CommandLineParser
                 dryRun: $chaosDryRun,
                 watch: $watch,
                 seed: $chaosSeed,
-                waitTimeoutSeconds: $chaosWaitTimeout,
+                waitTimeoutSeconds: $waitTimeout,
                 cooldownSeconds: $chaosCooldown,
                 allowSlotMigration: $chaosAllowSlotMigration,
                 allowPrimaryFailover: $chaosAllowPrimaryFailover,
@@ -968,6 +990,7 @@ final class CommandLineParser
             wait: $wait,
             killMethod: $killMethod,
             completionShell: $completionShell,
+            waitTimeoutSeconds: $waitTimeout,
         );
     }
 
@@ -1461,6 +1484,7 @@ final class CommandLineParser
             'flush' => 'flush PORT [PORT ...]',
             'fill' => 'fill [PORT] --size SIZE [--types CSV] [--members N] [--member-size N] [--keys N] [--pin-primary PORT]',
             'add-replica' => 'add-replica SEED_PORT [--port PORT]',
+            'primary-failover' => 'primary-failover SEED_PORT [--primary PORT] [--replica PORT] [--wait-timeout SECONDS]',
             'restart-replica' => 'restart-replica SEED_PORT [--replica PORT] [--primary PORT] [--all] [--wait] [--config NAME=VALUE]',
             'chaos' => 'chaos SEED_PORT [--categories LIST] [--interval SECONDS] [--max-events N] [--dry-run] [--watch]',
             'completions' => 'completions bash|zsh',

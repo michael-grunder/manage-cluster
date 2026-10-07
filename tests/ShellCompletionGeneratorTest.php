@@ -14,7 +14,7 @@ final class ShellCompletionGeneratorTest extends TestCase
         $script = (new ShellCompletionGenerator())->generate('bash', 'manage-cluster');
 
         self::assertStringContainsString('complete -F _manage_cluster manage-cluster', $script);
-        self::assertStringContainsString('start stop kill rebalance status list flush fill add-replica restart-replica chaos completions version help', $script);
+        self::assertStringContainsString('start stop kill rebalance status list flush fill add-replica restart-replica primary-failover chaos completions version help', $script);
         self::assertStringContainsString('--primaries', $script);
         self::assertStringContainsString('--replica', $script);
         self::assertStringContainsString('bash zsh', $script);
@@ -36,6 +36,7 @@ final class ShellCompletionGeneratorTest extends TestCase
         $script = (new ShellCompletionGenerator())->generate('zsh', 'manage-cluster');
 
         self::assertStringContainsString('#compdef manage-cluster', $script);
+        self::assertStringContainsString("'primary-failover:Promote a replica and wait for its primary to follow it'", $script);
         self::assertStringContainsString("'completions:Generate a shell completion script'", $script);
         self::assertStringContainsString("'--primaries'", $script);
         self::assertStringContainsString("'bash'", $script);

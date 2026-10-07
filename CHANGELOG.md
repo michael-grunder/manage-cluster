@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 ### Added
+- `primary-failover SEED_PORT` performs one coordinated primary failover, using
+  an interactive primary picker or `--primary`/`--replica` targets. It reuses the
+  chaos safety checks, waits for the role swap, reports elapsed time, and accepts
+  `--wait-timeout` (default: 60 seconds). Help and shell completions include the
+  new action.
 - `chaos --config-file PATH` reads chaos settings from a YAML file, so a soak
   profile can be checked in instead of retyped. The file names the same settings
   as the options without the leading dashes (`categories`, `interval`,

@@ -163,6 +163,10 @@ try {
             $manager->restartReplica($options);
             break;
 
+        case 'primary-failover':
+            $manager->primaryFailover($options);
+            break;
+
         case 'chaos':
             $manager->chaos($options);
             break;

@@ -36,6 +36,63 @@ final class CommandLineParserTest extends TestCase
         return new CommandLineParser(new InvocationName($display, 'manage-cluster'));
     }
 
+    /**
+     * @param list<string> $args
+     */
+    #[DataProvider('primaryFailoverOptionsProvider')]
+    public function testPrimaryFailoverOptions(array $args, ?int $primary, ?int $replica, int $timeout): void
+    {
+        $options = (new CommandLineParser())->parse(['bin/manage-cluster', ...$args]);
+
+        self::assertSame('primary-failover', $options->action);
+        self::assertSame([7000], $options->ports);
+        self::assertSame($primary, $options->primaryPort);
+        self::assertSame($replica, $options->replicaPort);
+        self::assertSame($timeout, $options->waitTimeoutSeconds);
+        self::assertNull($options->chaos);
+    }
+
+    /** @return iterable<string, array{list<string>, ?int, ?int, int}> */
+    public static function primaryFailoverOptionsProvider(): iterable
+    {
+        yield 'interactive' => [['primary-failover', '7000'], null, null, 60];
+        yield 'primary' => [['primary-failover', '7000', '--primary', '7000'], 7000, null, 60];
+        yield 'replica' => [['primary-failover', '7000', '--replica', '7003'], null, 7003, 60];
+        yield 'explicit pair and timeout' => [['primary-failover', '7000', '--primary', '7000', '--replica', '7003', '--wait-timeout', '120'], 7000, 7003, 120];
+        yield 'flag alias' => [['--primary-failover', '7000'], null, null, 60];
+    }
+
+    /** @param list<string> $args */
+    #[DataProvider('invalidPrimaryFailoverOptionsProvider')]
+    public function testInvalidPrimaryFailoverOptions(array $args, string $message): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage($message);
+        (new CommandLineParser())->parse(['bin/manage-cluster', 'primary-failover', ...$args]);
+    }
+
+    /** @return iterable<string, array{list<string>, string}> */
+    public static function invalidPrimaryFailoverOptionsProvider(): iterable
+    {
+        yield 'no seed' => [[], 'No ports provided'];
+        yield 'multiple seeds' => [['7000', '7001'], 'primary-failover expects exactly one seed port.'];
+        yield 'invalid primary' => [['7000', '--primary', '0'], '--primary must be a valid TCP port.'];
+        yield 'invalid replica' => [['7000', '--replica', '65536'], '--replica must be a valid TCP port.'];
+        yield 'zero timeout' => [['7000', '--wait-timeout', '0'], '--wait-timeout must be > 0.'];
+        yield 'negative timeout' => [['7000', '--wait-timeout', '-1'], '--wait-timeout expects a value.'];
+        yield 'all disallowed' => [['7000', '--all'], '--all can only be used with kill or restart-replica.'];
+    }
+
+    public function testPrimaryFailoverHelp(): void
+    {
+        $help = (new CommandLineParser())->contextualUsage('primary-failover');
+        self::assertStringContainsString('primary-failover SEED_PORT', $help);
+        self::assertStringContainsString('--primary PORT', $help);
+        self::assertStringContainsString('--replica PORT', $help);
+        self::assertStringContainsString('--wait-timeout SECONDS', $help);
+        self::assertStringContainsString('CLUSTER FAILOVER', $help);
+    }
+
     public function testUsageIncludesCommandsSection(): void
     {
         $usage = self::parserNamed()->usage();
@@ -350,7 +407,7 @@ final class CommandLineParserTest extends TestCase
         $parser = new CommandLineParser();
 
         $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('--replica can only be used with kill or restart-replica.');
+        $this->expectExceptionMessage('--replica can only be used with kill, restart-replica, or primary-failover.');
 
         $parser->parse(['bin/manage-cluster', 'status', '7000', '--replica', '7002']);
     }
@@ -360,7 +417,7 @@ final class CommandLineParserTest extends TestCase
         $parser = new CommandLineParser();
 
         $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('--primary can only be used with kill or restart-replica.');
+        $this->expectExceptionMessage('--primary can only be used with kill, restart-replica, or primary-failover.');
 
         $parser->parse(['bin/manage-cluster', 'status', '7000', '--primary', '7000']);
     }

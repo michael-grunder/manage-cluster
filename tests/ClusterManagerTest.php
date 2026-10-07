@@ -555,7 +555,7 @@ MESSAGE);
         $manager = $this->newClusterManagerWithoutConstructor();
         $method = new ReflectionClass($manager)->getMethod('isPrimaryFailoverSatisfied');
 
-        $satisfied = $method->invoke($manager, $event, $view);
+        $satisfied = $method->invoke($manager, $event->primaryFailoverPlan, $view);
         self::assertIsBool($satisfied);
 
         return $satisfied;

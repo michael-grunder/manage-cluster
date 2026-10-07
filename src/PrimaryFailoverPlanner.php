@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mgrunder\CreateCluster;
 
 use InvalidArgumentException;
+use RuntimeException;
 
 /**
  * Chooses which replicas may be promoted over their primary.
@@ -77,6 +78,27 @@ final readonly class PrimaryFailoverPlanner
         );
 
         return $plans;
+    }
+
+    public function select(ChaosClusterView $view, ?int $primaryPort, ?int $replicaPort): PrimaryFailoverPlan
+    {
+        if ($primaryPort === null && $replicaPort === null) {
+            throw new InvalidArgumentException('Select a primary or replica for primary-failover.');
+        }
+
+        foreach ($this->candidates($view) as $plan) {
+            if (($primaryPort === null || $plan->primaryPort === $primaryPort)
+                && ($replicaPort === null || $plan->replicaPort === $replicaPort)) {
+                return $plan;
+            }
+        }
+
+        throw new RuntimeException(sprintf(
+            'No eligible failover for primary %s, replica %s: requires a reachable managed slot-owning primary and an attached healthy managed replica with known replication lag <= %d bytes.',
+            $primaryPort === null ? 'any' : (string) $primaryPort,
+            $replicaPort === null ? 'any' : (string) $replicaPort,
+            $this->maxReplicationLagBytes,
+        ));
     }
 
     public function maxReplicationLagBytes(): int
